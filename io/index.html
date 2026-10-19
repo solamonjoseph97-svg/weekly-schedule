@@ -17,7 +17,7 @@
 <style>
 /* Layout: toolbar (nav, views, glance, people, add, settings) over Day / Week / Month views; week grid stretches so every block fits and zooms out to a full-week glance; people drawer on the side (bottom sheet on phones) */
 :root{
-  --bg:#f3f5f7; --surface:#ffffff; --fg:#14181d; --muted:#5d6670; --line:#e4e8ec; --line-strong:#c9cfd6; --accent:#1f5eff; --on-accent:#ffffff; --danger:#c62d2d;
+  --bg:#f3f5f7; --surface:#ffffff; --fg:#14181d; --muted:#5d6670; --line:#e4e8ec; --line-strong:#c9cfd6; --accent:#1f5eff; --on-accent:#ffffff; --danger:#c62d2d; --today:#e5484d;
   --ok:#1e7a45; --ok-bg:#dcf1e3; --warn:#8a5a00; --warn-bg:#fbefcf; --bad:#b3302a; --bad-bg:#fbe1df;
   --display:"Avenir Next Condensed","Arial Narrow",-apple-system,system-ui,sans-serif;
   --body:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,system-ui,sans-serif;
@@ -31,7 +31,7 @@
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#0f1216; --surface:#171b21; --fg:#e8ecf1; --muted:#97a1ac; --line:#232930; --line-strong:#353d47; --accent:#7ea2ff; --on-accent:#0f1216; --danger:#ff7b7b;
+  --bg:#0f1216; --surface:#171b21; --fg:#e8ecf1; --muted:#97a1ac; --line:#232930; --line-strong:#353d47; --accent:#7ea2ff; --on-accent:#0f1216; --danger:#ff7b7b; --today:#ff5c63;
   --ok:#7fd8a1; --ok-bg:#16301f; --warn:#f2c35b; --warn-bg:#33280e; --bad:#ff9a92; --bad-bg:#3a1a18;
   --p-blue-bg:#1b2b38; --p-blue:#8cc3e8; --p-orange-bg:#3a2617; --p-orange:#f3ab74;
   --p-purple-bg:#2e2138; --p-purple:#d1a3ec; --p-pink-bg:#3a1a29; --p-pink:#f48fbb;
@@ -140,7 +140,8 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .mc.out{background:color-mix(in srgb,var(--bg) 60%,transparent)}
 .mc.out .dn{color:var(--muted)}
 .mc .dn{font:700 13px var(--mono);display:flex;justify-content:space-between;align-items:center;gap:4px}
-.mc.today .dn b{background:var(--accent);color:var(--on-accent);border-radius:999px;padding:1px 7px}
+.mc.today{background:color-mix(in srgb,var(--today) 7%,transparent);box-shadow:inset 0 2px 0 var(--today)}
+.mc.today .dn b{background:var(--today);color:#fff;border-radius:999px;padding:1px 7px}
 .mc .rate{font:600 10px var(--mono);color:var(--ok)}
 .mchip{display:flex;align-items:center;gap:5px;font-size:11.5px;line-height:1.25;min-width:0;color:var(--fg)}
 .mchip i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--c)}
