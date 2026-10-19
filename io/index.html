@@ -336,7 +336,7 @@ body{overflow:hidden;overscroll-behavior:none}
       <button type="button" id="wExample"><b>Start from an example</b><span>A sample work week you can edit or clear.</span></button>
     </div>
     <button type="button" class="btn primary" id="wCoach" style="align-self:flex-start">New to scheduling? Let the coach walk you through it</button>
-    <button type="button" class="btn" id="wLoad" style="align-self:flex-start">Have a packet? Load it</button>
+    <div class="actions"><button type="button" class="btn" id="wLoad">Have a packet? Load it</button><button type="button" class="btn" id="wPaste">Got a link in a text? Paste it</button></div>
   </div>
 </div>
 
@@ -380,7 +380,7 @@ body{overflow:hidden;overscroll-behavior:none}
   <div class="actions"><button class="btn primary" id="dSend" type="button">Send my update</button><button class="btn" id="dRequest" type="button">Request updates</button></div>
   <div id="pPeople" class="rowlist"></div>
   <div id="pTeam" hidden></div>
-  <button class="btn primary" id="addPerson" type="button">+ Add a person's packet</button>
+  <div class="actions"><button class="btn primary" id="pastePerson" type="button">Paste a link from Messages</button><button class="btn" id="addPerson" type="button">Load a packet file</button></div>
   <p class="note">Ask them to open Schedule I.O., tap <b>Settings → Save packet</b>, and send it to you. Load it here to see their schedule and team stats.</p>
 </aside>
 
@@ -470,6 +470,7 @@ body{overflow:hidden;overscroll-behavior:none}
     <div class="actions">
       <button type="button" class="btn small" id="exportBtn">Save packet</button>
       <button type="button" class="btn small" id="importBtn">Load packet</button>
+      <button type="button" class="btn small" id="pasteSettings">Paste a link</button>
     </div>
     <div id="archWrap" class="rowlist">
       <h4>Saved schedules</h4>
@@ -506,6 +507,7 @@ body{overflow:hidden;overscroll-behavior:none}
       <button type="button" class="btn primary" id="sendText">Text my update</button>
       <button type="button" class="btn" id="sendShare">Share another way</button>
       <button type="button" class="btn" id="sendCopy">Copy link</button>
+      <button type="button" class="btn" id="sendFile">Send as a file</button>
       <button type="button" class="btn" id="sendClose">Close</button>
     </div>
   </div>
@@ -578,6 +580,27 @@ body{overflow:hidden;overscroll-behavior:none}
       <span class="sp"></span>
       <button type="button" class="btn primary" id="coachNext">Next</button>
     </div>
+  </div>
+</div>
+
+<!-- PASTE A LINK -->
+<div class="shade" id="pasteShade" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="pasteHead">
+    <h3 id="pasteHead">Paste a link</h3>
+    <p class="note">In Messages, press and hold the Schedule I.O. link (or the whole message) and tap <b>Copy</b>. Then come back here.</p>
+    <button type="button" class="btn primary" id="pasteGo" style="padding:13px">Paste from clipboard</button>
+    <label class="field">Or paste it here<textarea id="pasteText" rows="3" class="row-in" style="font-size:14px;resize:vertical" placeholder="Press and hold, then Paste"></textarea></label>
+    <p class="err" id="pasteErr"></p>
+    <div class="actions"><span class="sp"></span><button type="button" class="btn" id="pasteClose">Close</button><button type="button" class="btn primary" id="pasteLoad">Load</button></div>
+  </div>
+</div>
+<!-- SAFARI HANDOFF -->
+<div class="shade" id="hoShade" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="hoHead">
+    <h3 id="hoHead">Open in your app</h3>
+    <p class="note" style="font-size:14px;color:var(--fg)">iPhone opens links from Messages in Safari, which can't see the Schedule I.O. app on your home screen.</p>
+    <ol class="note" style="font-size:14px;color:var(--fg);margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px"><li>Tap <b>Copy link for my app</b></li><li>Open <b>Schedule I.O.</b> from your home screen</li><li>Tap <b>People → Paste link</b></li></ol>
+    <div class="stack"><button type="button" class="btn primary" id="hoCopy">Copy link for my app</button><button type="button" class="btn" id="hoHere">I don't have the app, use it here</button></div>
   </div>
 </div>
 <input type="file" id="importFile" hidden>
@@ -1245,7 +1268,7 @@ function sendCandidates(){
   P.forEach(p=>c.push({id:p.id,name:p.name||"Unnamed",phone:p.phone||""}));
   return c;
 }
-const sendBody=()=>`${S.name?S.name+"'s":"My"} latest schedule on Schedule I.O. Tap to load it: ${sendLink}`;
+const sendBody=()=>`${S.name?S.name+"'s":"My"} latest schedule on Schedule I.O. Tap to load it: ${sendLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Paste link.`;
 async function openSend(from){
   sendFrom=from||null;sendLink=await myLink();
   const cands=sendCandidates(),ok=id=>cands.some(c=>c.id===id&&cleanNum(c.phone));sendSel=new Set();
@@ -1271,7 +1294,7 @@ $("dSend").onclick=()=>openSend();
 
 /* --- request updates --- */
 let reqSel=new Set(),reqLink="";
-const reqBody=()=>`Hey! ${S.name||"I"} ${S.name?"is":"am"} asking for your latest Schedule I.O. update. Tap this link, then tap Send: ${reqLink}`;
+const reqBody=()=>`Hey! ${S.name||"I"} ${S.name?"is":"am"} asking for your latest Schedule I.O. update. Tap this link, then tap Send: ${reqLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Paste link.`;
 async function openRequest(){
   if(!P.length){toast("Add someone in People first");return}
   reqLink=appUrl()+"#r="+await pack({from:{id:S.ownerId,name:S.name,phone:S.phone||""}});
@@ -1377,9 +1400,17 @@ $("remBtn").onclick=()=>{$("setShade").hidden=true;commit();openReminder()};
 let pendingRoute=null;
 function showInvite(html){const b=$("wInvite");b.hidden=false;b.innerHTML=`<div><b>${html}</b><div class="hint">Set up below, it takes 10 seconds.</div></div>`}
 function runPending(){const r=pendingRoute;pendingRoute=null;if(!r)return;setTimeout(()=>{if(r.kind==="send")openSend(r.from);else if(r.kind==="join")openJoin(r.d);else if(r.kind==="packet")showImport(r.pk,"Shared schedule")},250)}
+const isStandalone=()=>{try{return matchMedia("(display-mode: standalone)").matches||navigator.standalone===true}catch(_){return false}};
+let handoffHash=null;
 async function route(){
   const h=location.hash;if(!h||h==="#")return;
-  const clear=()=>{try{history.replaceState(null,"",location.pathname+location.search)}catch(_){}};
+  // iPhone opens links from Messages in Safari, which can't see the home-screen app's data. Offer to hand off.
+  if(isIOS&&!isStandalone()&&!S&&/^#(p|r|t)=/.test(h)&&!route.skipHandoff){handoffHash=h;$("hoShade").hidden=false;return}
+  return handleHash(h,true);
+}
+async function handleHash(h,fromUrl){
+  if(!h||h==="#")return;
+  const clear=()=>{if(!fromUrl)return;try{history.replaceState(null,"",location.pathname+location.search)}catch(_){}};
   try{
     if(h.startsWith("#p=")){const pk=parsePacket(await unpack(h.slice(3)));clear();if(!pk){toast("That link isn't a valid schedule");return}
       if(!S){pendingRoute={kind:"packet",pk};showInvite(`${esc(pk.sch.name||"Someone")} shared their schedule with you.`);return}showImport(pk,"Shared schedule");return}
@@ -1393,6 +1424,25 @@ async function route(){
   }catch(e){clear();toast(e&&e.message==="old"?"Update your browser to open this link":"That link couldn't be opened. Ask them to send it again.")}
 }
 window.addEventListener("hashchange",route);
+/* ============ paste a link (for links received in Messages) ============ */
+const extractHash=t=>{const mm=String(t||"").match(/#(p|r|t)=([A-Za-z0-9_\-%]+)/);return mm?"#"+mm[1]+"="+mm[2]:null};
+function openPaste(){document.querySelectorAll(".shade").forEach(x=>x.hidden=true);$("pasteText").value="";$("pasteErr").textContent="";$("pasteShade").hidden=false}
+function loadPasted(text){const h=extractHash(text);if(!h){$("pasteErr").textContent="That doesn't look like a Schedule I.O. link. Copy the whole link from the message and try again.";return}
+  $("pasteShade").hidden=true;handleHash(h,false)}
+$("pasteGo").onclick=async()=>{
+  try{const t=await navigator.clipboard.readText();if(t){$("pasteText").value=t;loadPasted(t);return}}catch(_){}
+  $("pasteErr").textContent="Your phone didn't share the clipboard. Press and hold in the box below, tap Paste, then tap Load.";$("pasteText").focus();
+};
+$("pasteLoad").onclick=()=>loadPasted($("pasteText").value);
+$("pasteClose").onclick=()=>$("pasteShade").hidden=true;
+$("pasteShade").addEventListener("click",e=>{if(e.target===$("pasteShade"))$("pasteShade").hidden=true});
+$("pastePerson").onclick=openPaste;$("pasteSettings").onclick=openPaste;$("wPaste").onclick=openPaste;
+// Safari handoff sheet
+$("hoCopy").onclick=async()=>{try{await navigator.clipboard.writeText(location.href);toast("Link copied. Open Schedule I.O. and tap People → Paste link.")}catch(_){showLinkSheet("Copy this link","Press and hold to copy, then open Schedule I.O. and tap People → Paste link.",location.href,location.href)}};
+$("hoHere").onclick=()=>{$("hoShade").hidden=true;route.skipHandoff=true;const h=handoffHash;handoffHash=null;handleHash(h,true)};
+// send the packet as a file attachment
+$("sendFile").onclick=()=>{$("sendShade").hidden=true;deliverPacket({app:"schedule-io",format:2,savedAt:new Date().toISOString(),owner:{id:S.ownerId,name:S.name,phone:S.phone||""},schedule:linkSchedule()},`${safeName(S.name||S.title)} - Schedule IO - ${localDate()}${PKT_EXT}`)};
+
 
 /* ============ month picker ============ */
 let mpYear=NOW.getFullYear();
