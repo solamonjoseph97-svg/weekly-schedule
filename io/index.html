@@ -122,7 +122,16 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .item .k{display:block;font-size:11.5px;font-weight:500;color:var(--c);text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
 .item .prog{grid-column:1/-1;position:relative;height:22px;margin:-2px 0 -4px}
 .item .prog .trk{position:absolute;left:0;right:0;top:0;height:6px;border-radius:3px;background:color-mix(in srgb,var(--fg) 10%,transparent);overflow:hidden}
-.item .prog .fill{position:absolute;left:0;top:0;bottom:0;background:var(--today)}
+.item .prog .fill{position:absolute;left:0;top:0;bottom:0;background:var(--now)}
+:root{--now:var(--today)}
+.item{transition:transform .2s ease,box-shadow .2s ease}
+.item.live{position:relative;z-index:1;margin:4px 0 6px;transform:translateY(-2px);box-shadow:inset 4px 0 0 var(--c),inset 0 0 0 2.5px var(--now),0 10px 22px -10px color-mix(in srgb,var(--now) 60%,transparent),0 2px 6px -2px rgba(0,0,0,.18)}
+.item.live.flex,.item.live.open{border-color:transparent;box-shadow:inset 0 0 0 2.5px var(--now),0 10px 22px -10px color-mix(in srgb,var(--now) 60%,transparent),0 2px 6px -2px rgba(0,0,0,.18)}
+.item.open.live{background:var(--surface)}
+@media (prefers-reduced-motion:reduce){.item{transition:none}}
+.swatches{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+.swatches button{width:34px;height:34px;border-radius:50%;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line-strong);background:var(--sw);cursor:pointer;padding:0}
+.swatches button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
 .item .prog .tk{position:absolute;top:0;width:1px;height:6px;background:color-mix(in srgb,var(--fg) 28%,transparent);transform:translateX(-.5px)}
 .item .prog .tk.mj{height:10px;background:color-mix(in srgb,var(--fg) 45%,transparent)}
 .item .prog .lb{position:absolute;top:10px;transform:translateX(-50%);font:500 9.5px/12px var(--mono);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -515,6 +524,7 @@ body{overflow:hidden;overscroll-behavior:none}
       <label class="field">Day ends<select id="sEnd"></select></label>
     </div>
     <div class="tz" id="sTz"></div>
+    <div class="field">Current block highlight (day view)<div class="swatches" id="sNow" role="group" aria-label="Current block highlight color"></div></div>
     <label class="field">Your mobile number (optional)<input id="sPhone" type="tel" inputmode="tel" maxlength="24" autocomplete="tel" placeholder="So people can text you back"></label>
     <p class="note" style="margin-top:-6px">Included when you send your schedule, so replies come straight back to you.</p>
     <h4>Categories</h4>
@@ -1199,15 +1209,22 @@ function renderMetrics(){
     <div class="pair"><label class="field">${mt.fromTeam&&!isLead()?"Team target / week":"Weekly target"}<input class="row-in" type="number" min="0" step="1" inputmode="numeric" data-role="mtarget" value="${mt.target||""}" placeholder="none" ${mt.fromTeam&&!isLead()?"disabled":""}></label>
     <label class="field">My stretch target<input class="row-in" type="number" min="0" step="1" inputmode="numeric" data-role="mstretch" value="${mt.stretch||""}" placeholder="optional"></label></div></div>`).join("")+`<p class="note">List metrics in funnel order (for example Calls, Appointments, Presentations, Sales). Reports show the conversion between each step.</p>`:`<p class="note">No metrics yet.</p>`;
 }
+/* color of the current-block rim and progress bar in day view; saved per device */
+const NOWC=[["red","Red","var(--today)"],["orange","Orange","#f76b15"],["yellow","Yellow","#f5b000"],["green","Green","#1f9d55"],["blue","Blue","#1f5eff"],["purple","Purple","#8e4ec6"],["pink","Pink","#e93d82"],["ink","Black / white","var(--fg)"]];
+const nowPick=()=>{let v="red";try{v=localStorage.getItem(KEY+".now")||"red"}catch(_){}return NOWC.find(c=>c[0]===v)||NOWC[0]};
+const applyNow=()=>document.documentElement.style.setProperty("--now",nowPick()[2]);
+function renderNowSw(){const cur=nowPick()[0];$("sNow").innerHTML=NOWC.map(([id,name,c])=>`<button type="button" data-c="${id}" style="--sw:${c}" aria-label="${name}" title="${name}" aria-pressed="${id===cur}"></button>`).join("")}
+applyNow();
 function openSettings(){
   $("sName").value=S.name;$("sTitle").value=S.title;$("sWeek").value=String(S.weekStart);$("sStartDate").value=S.startDate;
   $("sStart").innerHTML=Array.from({length:13},(_,h)=>`<option value="${h}">${hourLabel(h)}</option>`).join("");
   $("sEnd").innerHTML=Array.from({length:13},(_,i)=>i+12).map(h=>`<option value="${h}">${hourLabel(h)}</option>`).join("");
   $("sStart").value=S.dayStart;$("sEnd").value=S.dayEnd;$("sTz").textContent="Time zone: "+tzLong()+(tzId()?" ("+tzId()+")":"")+", from this device";
-  $("sPhone").value=S.phone||"";renderTeamSettings();renderArchives();
+  $("sPhone").value=S.phone||"";renderTeamSettings();renderArchives();renderNowSw();
   renderCats();renderMetrics();$("setShade").hidden=false;
 }
 function closeSettings(){$("setShade").hidden=true;commit();if(!$("drawer").hidden)renderPeople()}
+$("sNow").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;try{localStorage.setItem(KEY+".now",b.dataset.c)}catch(_){}applyNow();renderNowSw();renderAll()});
 $("setBtn").onclick=openSettings;$("setDone").onclick=closeSettings;
 $("setShade").addEventListener("click",e=>{if(e.target===$("setShade"))closeSettings()});
 $("sName").oninput=e=>{S.name=e.target.value.trim()};$("sTitle").oninput=e=>{S.title=e.target.value.trim()};
