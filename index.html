@@ -134,6 +134,9 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .pkt span{font-size:13px;color:var(--muted)}
 .stack{display:flex;flex-direction:column;gap:8px}
 .stack .btn{width:100%;padding:11px 14px;font-size:14px}
+button{-webkit-tap-highlight-color:transparent;transition:transform .09s ease,filter .09s ease,background-color .15s;touch-action:manipulation}
+button:active:not(:disabled){transform:scale(.95);filter:brightness(.86)}
+.ev:active,.item:active{transform:scale(.985)!important}
 @media (prefers-reduced-motion:no-preference){.ev{transition:filter .12s}.ev:hover{filter:brightness(.97) saturate(1.1)}}
 </style>
 </head>
@@ -548,5 +551,6 @@ if("serviceWorker" in navigator&&/^https?:$/.test(location.protocol)){
   },1500);
 })();
 </script>
+<script>document.addEventListener("touchstart",()=>{},{passive:true})</script>
 </body>
 </html>

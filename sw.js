@@ -1,6 +1,6 @@
 // Offline support for the Weekly Schedule app. Always tries the network first so every open gets the latest version;
 // falls back to the saved copy only when offline. Bump VERSION when you change any file.
-const VERSION = "schedule-v5";
+const VERSION = "schedule-v6";
 const FILES = ["./", "index.html", "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {

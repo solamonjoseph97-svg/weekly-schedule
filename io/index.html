@@ -284,6 +284,16 @@ td.rate b{font-family:var(--mono)}
 .archive b{display:block;font-size:14px}
 .archive span{font-size:12px;color:var(--muted)}
 @media (max-width:560px){.compare2{grid-template-columns:1fr}.crow2 .grid3{grid-template-columns:1fr 1fr}.pweek{grid-template-columns:repeat(7,88px)}}
+
+/* tap feedback: every button visibly presses in */
+button{-webkit-tap-highlight-color:transparent;transition:transform .09s ease,filter .09s ease,background-color .15s,box-shadow .15s;touch-action:manipulation}
+button:active:not(:disabled):not([aria-disabled="true"]){transform:scale(.95);filter:brightness(.86)}
+.btn.primary:active:not(:disabled){box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 30%,transparent)}
+.ev:active,.item:active,.mc:active,.personas button:active,.radio button:active,.choice button:active{transform:scale(.985)!important}
+button:disabled,button[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
+.btn.busy{pointer-events:none;opacity:.7}
+.btn.busy::after{content:"";display:inline-block;width:10px;height:10px;margin-left:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 /* app shell: the chrome stays put, each view scrolls inside its own frame */
 html,body{height:100%}
 body{overflow:hidden;overscroll-behavior:none}
@@ -1191,14 +1201,25 @@ async function unpack(str){
 const UA=navigator.userAgent, isApple=/iPhone|iPad|iPod|Macintosh/.test(UA), isIOS=/iPhone|iPad|iPod/.test(UA)||(/Macintosh/.test(UA)&&navigator.maxTouchPoints>1);
 const cleanNum=n=>String(n||"").replace(/[^\d+]/g,"");
 function smsUrl(nums,body){
-  const n=nums.map(cleanNum).filter(Boolean),b=encodeURIComponent(body);if(!n.length)return null;
-  if(isApple)return n.length>1?`sms://open?addresses=${n.join(",")}/&body=${b}`:`sms:${n[0]}&body=${b}`;
+  const n=nums.map(cleanNum).filter(Boolean),b=encodeURIComponent(body);
+  if(isApple){if(!n.length)return `sms:&body=${b}`;return n.length>1?`sms:/open?addresses=${n.join(",")}&body=${b}`:`sms:${n[0]}&body=${b}`}
   return `sms:${n.join(",")}?body=${b}`;
 }
 function openUrl(u,newTab,dl){const a=document.createElement("a");a.href=u;if(newTab){a.target="_blank";a.rel="noopener"}if(dl)a.download=dl;document.body.appendChild(a);a.click();a.remove()}
+const isMacDesktop=/Macintosh/.test(UA)&&!isIOS;
+function launchMessage(nums,body){
+  if(isMacDesktop||!/Mobi|Android|iPhone|iPad|iPod/.test(UA)&&!isIOS){toast("Opening share menu…");shareText(body);return}
+  const u=smsUrl(nums,body);let left=false;const mark=()=>{left=true};
+  window.addEventListener("blur",mark,{once:true});document.addEventListener("visibilitychange",mark,{once:true});pageHideMark=mark;
+  toast("Opening Messages…");
+  try{window.location.href=u}catch(_){openUrl(u)}
+  setTimeout(()=>{window.removeEventListener("blur",mark);document.removeEventListener("visibilitychange",mark);
+    if(!left)showLinkSheet("Messages didn't open","Tap Share to pick Messages or any app, or copy the message and paste it.","",body)},1600);
+}
+let pageHideMark=null;
 async function shareText(text){
   try{if(navigator.share){await navigator.share({text});return}}catch(e){if(e&&e.name==="AbortError")return}
-  try{await navigator.clipboard.writeText(text);toast("Copied. Paste it in a message.")}catch(_){toast("Couldn't open sharing on this device")}
+  try{await navigator.clipboard.writeText(text);toast("Message copied. Paste it into Messages.")}catch(_){showLinkSheet("Copy this message","Press and hold to copy, then paste it into Messages.","",text)}
 }
 async function copyText(text){try{await navigator.clipboard.writeText(text);toast("Link copied")}catch(_){toast("Couldn't copy. Press and hold the link to copy it.")}}
 function linkSchedule(){
@@ -1235,12 +1256,12 @@ async function openSend(from){
 function renderSendTo(){
   const cands=sendCandidates();
   $("sendTo").innerHTML=cands.length?cands.map(c=>`<button type="button" data-id="${esc(c.id)}" aria-pressed="${sendSel.has(c.id)}" ${cleanNum(c.phone)?"":"disabled"}>${esc(c.name)}${cleanNum(c.phone)?"":" · no number"}</button>`).join(""):`<span class="note">No one added yet. Use Share another way.</span>`;
-  $("sendText").textContent=sendSel.size?`Text my update (${sendSel.size})`:"Text my update";$("sendText").disabled=!sendSel.size;
+  $("sendText").textContent=sendSel.size?`Text my update to ${sendSel.size===1?cands.find(c=>sendSel.has(c.id))?.name.replace(" (lead)",""):sendSel.size+" people"}`:"Text my update";$("sendText").disabled=false;
   $("sendNoPhones").textContent=cands.some(c=>!cleanNum(c.phone))?"Add mobile numbers in People to text people directly.":"";
 }
 $("sendTo").onclick=e=>{const b=e.target.closest("button");if(!b||b.disabled)return;const id=b.dataset.id;sendSel.has(id)?sendSel.delete(id):sendSel.add(id);renderSendTo()};
-$("sendText").onclick=()=>{const nums=sendCandidates().filter(c=>sendSel.has(c.id)).map(c=>c.phone);const u=smsUrl(nums,sendBody());if(!u)return;
-  S.sendTo=[...sendSel].filter(id=>!id.startsWith("req:"));persist();$("sendShade").hidden=true;openUrl(u)};
+$("sendText").onclick=()=>{const nums=sendCandidates().filter(c=>sendSel.has(c.id)).map(c=>c.phone);
+  S.sendTo=[...sendSel].filter(id=>!id.startsWith("req:"));persist();$("sendShade").hidden=true;launchMessage(nums,sendBody())};
 $("sendShare").onclick=()=>shareText(sendBody());
 $("sendCopy").onclick=()=>copyText(sendLink);
 $("sendClose").onclick=()=>$("sendShade").hidden=true;
@@ -1257,13 +1278,13 @@ async function openRequest(){
 }
 function renderReq(){
   $("reqTo").innerHTML=P.map(p=>`<button type="button" data-id="${esc(p.id)}" aria-pressed="${reqSel.has(p.id)}" ${cleanNum(p.phone)?"":"disabled"}>${esc(p.name||"Unnamed")} · ${cleanNum(p.phone)?ago(p.savedAt):"no number"}</button>`).join("");
-  $("reqText").textContent=reqSel.size?`Text request (${reqSel.size})`:"Text request";$("reqText").disabled=!reqSel.size;
+  $("reqText").textContent=reqSel.size?`Text request to ${reqSel.size===1?(P.find(p=>reqSel.has(p.id))?.name||"1 person"):reqSel.size+" people"}`:"Text request";$("reqText").disabled=false;
   $("reqNote").textContent=(!S.phone?"Add your mobile number in Settings so their replies come straight back to you. ":"")+(P.some(p=>!cleanNum(p.phone))?"People without a number can't be texted from here; use Share another way.":"");
 }
 $("reqTo").onclick=e=>{const b=e.target.closest("button");if(!b||b.disabled)return;const id=b.dataset.id;reqSel.has(id)?reqSel.delete(id):reqSel.add(id);renderReq()};
 $("reqStale").onclick=()=>{reqSel=new Set(staleList().filter(p=>cleanNum(p.phone)).map(p=>p.id));renderReq();if(!reqSel.size)toast("No one with a number is behind")};
 $("reqAll").onclick=()=>{reqSel=new Set(P.filter(p=>cleanNum(p.phone)).map(p=>p.id));renderReq()};
-$("reqText").onclick=()=>{const u=smsUrl(P.filter(p=>reqSel.has(p.id)).map(p=>p.phone),reqBody());if(!u)return;$("reqShade").hidden=true;openUrl(u)};
+$("reqText").onclick=()=>{$("reqShade").hidden=true;launchMessage(P.filter(p=>reqSel.has(p.id)).map(p=>p.phone),reqBody())};
 $("reqShare").onclick=()=>shareText(reqBody());
 $("reqClose").onclick=()=>$("reqShade").hidden=true;
 $("dRequest").onclick=()=>openRequest();
@@ -1271,7 +1292,7 @@ $("pPeople").addEventListener("change",e=>{if(e.target.dataset.act!=="phone")ret
 
 /* --- generic link sheet --- */
 let linkText="",linkUrl="";
-function showLinkSheet(title,note,url,text){linkUrl=url;linkText=text;$("linkTitle").textContent=title;$("linkNote").textContent=note;$("linkBox").textContent=url;document.querySelectorAll(".shade").forEach(x=>x.hidden=true);$("linkShade").hidden=false}
+function showLinkSheet(title,note,url,text){linkUrl=url||text;linkText=text;$("linkTitle").textContent=title;$("linkNote").textContent=note;$("linkBox").textContent=url||text;$("linkCopy").textContent=url?"Copy link":"Copy message";document.querySelectorAll(".shade").forEach(x=>x.hidden=true);$("linkShade").hidden=false}
 $("linkShare").onclick=()=>shareText(linkText);$("linkCopy").onclick=()=>copyText(linkUrl);$("linkClose").onclick=()=>$("linkShade").hidden=true;
 
 /* --- teams --- */
@@ -1612,6 +1633,7 @@ $("coachBack").onclick=()=>{if(W.step>0){W.step--;renderCoach()}};
 $("coachQuit").onclick=e=>armed(e.target,"Exit coach","Tap again to exit",()=>{$("coachShade").hidden=true;W=null});
 $("coachBtn").onclick=openCoach;
 
+document.addEventListener("touchstart",()=>{},{passive:true});
 /* ============ welcome ============ */
 $("stripes").innerHTML=PALETTE.slice(0,8).map(c=>`<i style="--sw:var(--p-${c})"></i>`).join("");
 function startWith(example){
