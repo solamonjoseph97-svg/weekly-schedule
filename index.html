@@ -492,7 +492,19 @@ setView(savedView||(window.innerWidth<760?"day":"week"));
 let rzT=0;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{if(!$("weekView").hidden)fit()},150)});
 // refresh "today" and the now-line when the app comes back to the foreground on a new day
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&$("shade").hidden){const d=new Date();if((d.getDay()+6)%7!==todayIdx||Math.abs(d.getHours()*60+d.getMinutes()-nowMin)>10)location.reload()}});
-if("serviceWorker" in navigator&&/^https?:$/.test(location.protocol)){navigator.serviceWorker.register("sw.js").catch(()=>{})}
+if("serviceWorker" in navigator&&/^https?:$/.test(location.protocol)){
+  const hadController=!!navigator.serviceWorker.controller;let refreshing=false;
+  const busy=()=>[...document.querySelectorAll(".shade")].some(s=>!s.hidden);
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{
+    if(!hadController||refreshing)return;
+    if(busy()){toast("Update downloaded. It applies when you close this window.");const go=()=>{if(!busy()&&!refreshing){refreshing=true;location.reload()}};document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")go()});document.addEventListener("click",()=>setTimeout(go,50));return}
+    refreshing=true;location.reload();
+  });
+  navigator.serviceWorker.register("sw.js",{updateViaCache:"none"}).then(reg=>{
+    reg.update().catch(()=>{});
+    document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")reg.update().catch(()=>{})});
+  }).catch(()=>{});
+}
 </script>
 
 <!-- install prompt -->

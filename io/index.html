@@ -998,7 +998,19 @@ load();boot();
 let rzT=0;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{if(S&&view==="week"){fit();if(glance)applyGlance(false)}},150)});
 setInterval(()=>{if(S&&document.visibilityState==="visible"&&$("shade").hidden&&$("ciShade").hidden&&$("setShade").hidden&&$("impShade").hidden){const t=new Date();if(t.getMinutes()!==nowMin%60)renderAll()}},60000);
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&S&&$("shade").hidden&&$("ciShade").hidden&&$("setShade").hidden)renderAll()});
-if("serviceWorker" in navigator&&/^https?:$/.test(location.protocol)){navigator.serviceWorker.register("sw.js").catch(()=>{})}
+if("serviceWorker" in navigator&&/^https?:$/.test(location.protocol)){
+  const hadController=!!navigator.serviceWorker.controller;let refreshing=false;
+  const busy=()=>[...document.querySelectorAll(".shade")].some(s=>!s.hidden);
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{
+    if(!hadController||refreshing)return;
+    if(busy()){toast("Update downloaded. It applies when you close this window.");const go=()=>{if(!busy()&&!refreshing){refreshing=true;location.reload()}};document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")go()});document.addEventListener("click",()=>setTimeout(go,50));return}
+    refreshing=true;location.reload();
+  });
+  navigator.serviceWorker.register("sw.js",{updateViaCache:"none"}).then(reg=>{
+    reg.update().catch(()=>{});
+    document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")reg.update().catch(()=>{})});
+  }).catch(()=>{});
+}
 </script>
 <!-- install prompt -->
 <style>

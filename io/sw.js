@@ -1,9 +1,12 @@
-// Offline cache for the Schedule I.O. app. Bump VERSION when you change any file.
-const VERSION = "schedule-io-v4";
+// Offline support for Schedule I.O.. Always tries the network first so every open gets the latest version;
+// falls back to the saved copy only when offline. Bump VERSION when you change any file.
+const VERSION = "schedule-io-v5";
 const FILES = ["./", "index.html", "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION)
+    .then(c => c.addAll(FILES.map(f => new Request(f, { cache: "reload" }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", e => {
@@ -14,17 +17,18 @@ self.addEventListener("activate", e => {
   );
 });
 
-// Serve from cache instantly, refresh the cache in the background when online.
 self.addEventListener("fetch", e => {
-  if (e.request.method !== "GET") return;
-  e.respondWith(
-    caches.open(VERSION).then(cache =>
-      cache.match(e.request, { ignoreSearch: true }).then(hit => {
-        const net = fetch(e.request)
-          .then(res => { if (res.ok) cache.put(e.request, res.clone()); return res; })
-          .catch(() => hit);
-        return hit || net;
-      })
-    )
-  );
+  const req = e.request;
+  if (req.method !== "GET" || new URL(req.url).origin !== location.origin) return;
+  e.respondWith((async () => {
+    const cache = await caches.open(VERSION);
+    try {
+      const res = await fetch(req, { cache: "no-cache" });
+      if (res.ok) cache.put(req, res.clone());
+      return res;
+    } catch (_) {
+      return (await cache.match(req, { ignoreSearch: true })) ||
+             (req.mode === "navigate" ? (await cache.match("index.html")) || cache.match("./") : Response.error());
+    }
+  })());
 });
