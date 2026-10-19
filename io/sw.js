@@ -1,6 +1,6 @@
 // Offline support for Schedule I.O.. Always tries the network first so every open gets the latest version;
 // falls back to the saved copy only when offline. Bump VERSION when you change any file.
-const VERSION = "schedule-io-v27";
+const VERSION = "schedule-io-v28";
 const FILES = ["./", "index.html", "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {

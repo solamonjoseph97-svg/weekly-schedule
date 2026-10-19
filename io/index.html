@@ -224,6 +224,11 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .syncstat b{font-size:14px;overflow-wrap:anywhere}.syncstat span{font-size:12.5px;color:var(--muted)}
 .wsync{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:14px;margin-top:4px}.wsync[hidden]{display:none}
 .legal a{color:var(--muted)}
+.bkbox{display:flex;flex-direction:column;gap:8px}
+.bkbox .chk{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
+.bkbox .row{display:flex;flex-wrap:wrap;gap:8px}
+.bkbar{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:17;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px -12px rgba(0,0,0,.35);padding:10px 12px;font-size:13.5px;font-weight:600;width:max-content;max-width:calc(100vw - 24px)}
+.bkbar[hidden]{display:none}
 .syncmore summary{font-size:13px;color:var(--muted);cursor:pointer;padding:4px 0}
 .syncmore[open]{display:flex;flex-direction:column;gap:8px}
 .rowlist{display:flex;flex-direction:column;gap:10px}
@@ -527,6 +532,7 @@ body{overflow:hidden;overscroll-behavior:none}
   <div class="legend" id="legend"></div>
   <div class="sumshade" id="sumShade" hidden></div>
   <div class="sumpanel" id="sumPanel" role="dialog" aria-label="Time summary" hidden></div>
+  <div class="bkbar" id="bkBar" hidden role="status"><span>Save today's backup file?</span><button type="button" class="btn small primary" id="bkGo">Save backup</button><button type="button" class="btn small" id="bkLater">Later</button></div>
 
   <section id="weekView" class="board" aria-label="Week view"><div class="zoom" id="zoom"><div class="grid" id="grid"></div></div></section>
   <section id="dayView" hidden aria-label="Day view">
@@ -632,11 +638,12 @@ body{overflow:hidden;overscroll-behavior:none}
       <button type="button" class="btn small danger" id="teamLeave">Leave team</button>
     </div>
     <h4>Schedule packet</h4>
-    <p class="note">Your schedule lives only on this device. Save a packet to your Files, AirDrop or text it to back up, move devices, or share with friends and your team.</p>
+    <p class="note">Save a packet to your Files, AirDrop or text it to back up, move devices, or share with friends and your team.</p>
     <div class="actions">
       <button type="button" class="btn small" id="exportBtn">Save packet</button>
       <button type="button" class="btn small" id="rcvSettings">Add Packet ▾</button>
     </div>
+    <div class="bkbox" id="bkBox"></div>
     <div id="archWrap" class="rowlist">
       <h4>Saved schedules</h4>
       <p class="note">Older versions you saved when you replaced your schedule. Restoring one saves your current schedule first.</p>
@@ -1385,7 +1392,7 @@ function openSettings(){
   $("sStart").innerHTML=Array.from({length:13},(_,h)=>`<option value="${h}">${hourLabel(h)}</option>`).join("");
   $("sEnd").innerHTML=Array.from({length:13},(_,i)=>i+12).map(h=>`<option value="${h}">${hourLabel(h)}</option>`).join("");
   $("sStart").value=S.dayStart;$("sEnd").value=S.dayEnd;$("sTz").textContent="Time zone: "+tzLong()+(tzId()?" ("+tzId()+")":"")+", from this device";
-  $("sPhone").value=S.phone||"";renderSyncUI();renderTeamSettings();renderArchives();renderNowSw();
+  $("sPhone").value=S.phone||"";renderSyncUI();renderBackupUI();renderTeamSettings();renderArchives();renderNowSw();
   renderCats();renderMetrics();$("setShade").hidden=false;
 }
 function closeSettings(){$("setShade").hidden=true;commit();if(!$("drawer").hidden)renderPeople()}
@@ -2267,13 +2274,64 @@ $("setShade").addEventListener("click",async e=>{
   else if(id==="syncOutAll")armed(e.target.closest("button"),"Sign out of all devices","Tap again to confirm",async()=>{try{await api("POST","/auth/signout-all")}catch(_){}signOutLocal();toast("Signed out everywhere")});
   else if(id==="syncDel")armed(e.target.closest("button"),"Delete my cloud data","Tap again: deletes it from the server",async()=>{try{await api("DELETE","/data");signOutLocal();toast("Cloud data deleted")}catch(_){toast("Couldn't reach the server. Try again.")}});
 });
-setInterval(()=>{if(syncOn()&&document.visibilityState==="visible")syncNow()},120000);
+setInterval(()=>{if(syncOn()&&document.visibilityState==="visible")syncNow()},600000);
 setInterval(()=>{if(!$("setShade").hidden&&syncOn()&&!syncing)renderSyncUI()},30000);
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState!=="visible")return;if(SY.pending)pollClaim();else if(syncOn())syncNow()});
 addEventListener("online",()=>{if(syncOn())syncNow()});
 
+/* ============ daily backup file ============ */
+// Chrome/Edge on a computer: pick a file once, then it's overwritten automatically each day.
+// Safari / iPhone / iPad: browsers can't write files silently, so once a day the app offers a one-tap save.
+const BKEY=KEY+".backup",BK_NAME="Schedule IO backup"+PKT_EXT;
+let BK={};try{BK=JSON.parse(localStorage.getItem(BKEY)||"{}")||{}}catch(_){BK={}}
+const saveBK=()=>{try{localStorage.setItem(BKEY,JSON.stringify(BK))}catch(_){}};
+const fsOK=()=>typeof window.showSaveFilePicker==="function"&&window.self===window.top;
+let bkHandle=null,bkLaterDay="";
+function bkDB(){return new Promise((res,rej)=>{const r=indexedDB.open("schedule-io-backup",1);r.onupgradeneeded=()=>r.result.createObjectStore("h");r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+async function bkGetHandle(){if(bkHandle)return bkHandle;try{const db=await bkDB();bkHandle=await new Promise(r=>{const q=db.transaction("h").objectStore("h").get("file");q.onsuccess=()=>r(q.result||null);q.onerror=()=>r(null)})}catch(_){}return bkHandle}
+async function bkSetHandle(h){bkHandle=h;try{const db=await bkDB();db.transaction("h","readwrite").objectStore("h").put(h,"file")}catch(_){}}
+const bkPacket=()=>({app:"schedule-io",format:2,savedAt:new Date().toISOString(),owner:{id:S.ownerId,name:S.name,phone:S.phone||""},schedule:S,people:P});
+async function bkWrite(h){const w=await h.createWritable();await w.write(JSON.stringify(bkPacket()));await w.close();BK.last=TODAY;BK.file=h.name||BK_NAME;saveBK();renderBackupUI()}
+async function bkPick(){
+  const h=await window.showSaveFilePicker({suggestedName:BK_NAME,types:[{description:"Schedule I.O. backup",accept:{"application/octet-stream":[PKT_EXT]}}]});
+  await bkSetHandle(h);await bkWrite(h);toast("Backup saved. It will update every day.");
+}
+async function backupNow(fromTap){
+  if(!S)return;
+  if(fsOK()){const h=await bkGetHandle();
+    if(h){try{let perm=await h.queryPermission({mode:"readwrite"});if(perm!=="granted"&&fromTap)perm=await h.requestPermission({mode:"readwrite"});
+        if(perm==="granted"){await bkWrite(h);if(fromTap)toast("Backup saved");return true}}catch(_){}}
+    if(fromTap){try{await bkPick();return true}catch(e){if(e&&e.name==="AbortError")return false}}
+    if(!fromTap)return false;
+  }
+  if(!fromTap)return false;
+  await deliverPacket(bkPacket(),BK_NAME);BK.last=TODAY;saveBK();renderBackupUI();return true;
+}
+async function dailyBackup(){
+  $("bkBar").hidden=true;
+  if(!S||!BK.on||BK.last===TODAY||bkLaterDay===TODAY)return;
+  if(await backupNow(false))return;          // silent overwrite worked (Chrome/Edge with a chosen file)
+  if(!$("welcome").hidden)return;
+  $("bkBar").hidden=false;                    // otherwise offer the one-tap save
+}
+$("bkGo").onclick=async()=>{$("bkBar").hidden=true;await backupNow(true)};
+$("bkLater").onclick=()=>{bkLaterDay=TODAY;$("bkBar").hidden=true};
+function renderBackupUI(){
+  const box=$("bkBox");if(!box)return;
+  const last=BK.last?(BK.last===TODAY?"today":dShort(parseD(BK.last))):"never";
+  box.innerHTML=`<label class="chk"><input type="checkbox" id="bkOn" ${BK.on?"checked":""}> Daily backup file</label>
+    <p class="note">${fsOK()?`Keeps one file up to date every day, automatically${BK.file?` (${esc(BK.file)})`:""}. Save it in iCloud Drive to have it on every device.`:"Once a day the app offers to save a backup. Tap Save to Files and choose Replace to keep one up-to-date file."} Last backup: ${last}.</p>
+    <div class="row"><button type="button" class="btn small" id="bkNow">Back up now</button>${fsOK()&&BK.on?`<button type="button" class="btn small" id="bkFile">${BK.file?"Change file":"Choose file"}</button>`:""}</div>`;
+}
+$("bkBox").addEventListener("change",async e=>{if(e.target.id!=="bkOn")return;BK.on=e.target.checked;saveBK();
+  if(BK.on&&fsOK()&&!(await bkGetHandle())){try{await bkPick()}catch(_){}}else if(BK.on&&BK.last!==TODAY&&!fsOK())toast("You'll get a daily prompt to save a backup");
+  renderBackupUI()});
+$("bkBox").addEventListener("click",async e=>{const id=e.target.closest("button")?.id;if(id==="bkNow")backupNow(true);else if(id==="bkFile"){try{await bkPick()}catch(_){}}});
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")setTimeout(dailyBackup,1500)});
+
 load();boot();route();
 renderSyncUI();if(SY.pending)pollClaim();else if(syncOn())syncNow();
+setTimeout(dailyBackup,2500);
 let rzT=0;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{if(S&&view==="week"){fit();if(glance)applyGlance(false)}},150)});
 setInterval(()=>{if(S&&document.visibilityState==="visible"&&$("shade").hidden&&$("ciShade").hidden&&$("setShade").hidden&&$("impShade").hidden){const t=new Date();if(t.getMinutes()!==nowMin%60)renderAll()}},60000);
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&S&&$("shade").hidden&&$("ciShade").hidden&&$("setShade").hidden)renderAll()});
