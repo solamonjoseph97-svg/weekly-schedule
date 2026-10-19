@@ -412,6 +412,34 @@ body{overflow:hidden;overscroll-behavior:none}
 #app.wrap{height:100%;padding-block:12px 10px;gap:10px;min-height:0}
 #app > header,#app > .toolbar,#app > .banner,#app > .legend,#app > .hint{flex:none}
 #weekView,#monthView{flex:1 1 auto;min-height:0}
+#moreBtn{display:none}
+.moremenu{position:fixed;z-index:21;min-width:200px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px -14px rgba(0,0,0,.4);padding:6px;display:flex;flex-direction:column}
+.moremenu[hidden]{display:none}
+.moremenu button{font:600 14px var(--body);text-align:left;padding:11px 12px;border:0;border-radius:8px;background:none;color:var(--fg);cursor:pointer}
+.moremenu button:active{background:var(--bg)}
+/* phone landscape: one compact bar, more room for the schedule */
+#app.land[hidden]{display:none}
+#app.land{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);column-gap:10px;row-gap:6px;padding-block:6px 4px}
+#app.land > header,#app.land > .hint{display:none}
+#app.land > .toolbar{grid-column:1;grid-row:1;flex-wrap:nowrap;gap:6px}
+#app.land > .legend{grid-column:2;grid-row:1;justify-content:flex-end;flex-wrap:nowrap;overflow:visible;padding:0;min-width:0}
+#app.land > .banner{grid-column:1/-1;grid-row:2}
+#app.land > section{grid-column:1/-1;grid-row:3;min-height:0}
+#app.land #glanceBtn,#app.land #peopleBtn,#app.land #coachBtn,#app.land #setBtn,#app.land .toolbar .sp{display:none}
+#app.land #moreBtn{display:inline-block;padding:6px 12px;font-size:16px;line-height:1}
+#app.land .btn{padding:6px 10px;font-size:12.5px}
+#app.land .nav .btn{padding:6px 9px}
+#app.land .toggle{padding:2px}#app.land .toggle button{padding:4px 10px;font-size:12.5px}
+#app.land .sumbtn{padding:5px 10px 5px 12px;font-size:12.5px;gap:8px;max-width:100%}
+#app.land.barhide > .toolbar,#app.land.barhide > .legend,#app.land.barhide > .banner{display:none}
+#app.land .days{padding-bottom:4px}
+#app.land .days button{padding:4px 6px;font-size:12px}
+#app.land .days button small{display:inline;margin-left:4px;font-size:10.5px}
+#app.land .agenda{display:block;column-count:2;column-gap:12px}
+#app.land .agenda > *{break-inside:avoid;margin-bottom:8px}
+#app.land .agenda h2,#app.land .agenda .gap{column-span:all}
+#app.land .agenda h2{font-size:18px;margin:2px 0}
+@media (max-width:720px){#app.land .sumbtn .dots{display:none}}
 #dayView{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 #welcome{height:100%;overflow:auto;padding-block:18px 40px}
 .dh{position:sticky;top:0;z-index:6}
@@ -470,6 +498,13 @@ body{overflow:hidden;overscroll-behavior:none}
     <button class="btn primary" id="addBtn" type="button">+ Add</button>
     <button class="btn" id="coachBtn" type="button">Coach</button>
     <button class="btn" id="setBtn" type="button">Settings</button>
+    <button class="btn" id="moreBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More">⋯</button>
+  </div>
+  <div class="moremenu" id="moreMenu" role="menu" hidden>
+    <button type="button" role="menuitem" data-go="peopleBtn">People</button>
+    <button type="button" role="menuitem" data-go="glanceBtn">Week at a glance</button>
+    <button type="button" role="menuitem" data-go="coachBtn">Coach</button>
+    <button type="button" role="menuitem" data-go="setBtn">Settings</button>
   </div>
   <div class="banner" id="viewBanner" hidden></div>
   <div class="legend" id="legend"></div>
@@ -1019,7 +1054,8 @@ function glanceScale(){
   return {W,H,s:Math.min(1,(board.clientWidth-2)/W,availH/H)};
 }
 function applyGlance(animate){
-  const grid=$("grid"),zoom=$("zoom");const{H,s}=glanceScale();
+  const grid=$("grid"),zoom=$("zoom");grid.style.width="";let{H,s}=glanceScale();
+  if(land&&s<1){grid.style.width=Math.max(grid.offsetWidth,($("weekView").clientWidth-2)/s)+"px";({H,s}=glanceScale())}
   if(!animate){grid.style.transition="none";zoom.style.transition="none"}
   zoom.classList.add("zooming");zoom.style.height=H*s+"px";grid.style.transform=`scale(${s})`;
   if(!animate){void grid.offsetHeight;grid.style.transition="";zoom.style.transition=""}
@@ -1033,10 +1069,10 @@ function setGlance(on,targetKey,instant){
   }else{
     glance=false;board.classList.remove("glance");
     const H=grid.offsetHeight;
-    if(instant){grid.style.transform="";zoom.style.height="";zoom.classList.remove("zooming");}
+    if(instant){grid.style.transform="";grid.style.width="";zoom.style.height="";zoom.classList.remove("zooming");}
     else{
       grid.style.transform="scale(1)";zoom.style.height=H+"px";
-      setTimeout(()=>{zoom.style.height="";zoom.classList.remove("zooming");grid.style.transform="";
+      setTimeout(()=>{zoom.style.height="";zoom.classList.remove("zooming");grid.style.transform="";grid.style.width="";
         if(targetKey){const el=grid.querySelector(`[data-key="${CSS.escape(targetKey)}"]`);if(el){
           const br=board.getBoundingClientRect(),er=el.getBoundingClientRect();
           board.scrollTo({left:board.scrollLeft+er.left-br.left-(board.clientWidth-er.width)/2,top:board.scrollTop+er.top-br.top-(board.clientHeight-er.height)/2,behavior:"smooth"});
@@ -1047,6 +1083,28 @@ function setGlance(on,targetKey,instant){
   $("glanceBtn").setAttribute("aria-pressed",glance);renderHeader();
 }
 $("glanceBtn").onclick=()=>setGlance(!glance);
+/* ---- phone landscape: compact bar, auto-hiding on scroll, whole week at a glance ---- */
+const landMQ=matchMedia("(orientation: landscape) and (max-height: 500px)");let land=false,autoGlance=false;
+function setLand(){const on=landMQ.matches;if(on===land)return;land=on;$("app").classList.toggle("land",on);$("app").classList.remove("barhide");closeMore();
+  if(!S)return;
+  if(on&&view==="week"&&!glance){autoGlance=true;setGlance(true,null)}
+  else if(!on&&autoGlance){autoGlance=false;if(glance)setGlance(false,null,true)}
+  else renderAll();
+  setTimeout(()=>{if(view==="week"){fit();if(glance)applyGlance(false)}},60)}
+(landMQ.addEventListener?landMQ.addEventListener("change",setLand):landMQ.addListener(setLand));
+const lastTop=new WeakMap();
+document.addEventListener("scroll",e=>{if(!land)return;const t=e.target;if(!(t instanceof Element)||!t.closest("#weekView,#dayView,#monthView"))return;
+  const top=t.scrollTop,prev=lastTop.get(t)??top;lastTop.set(t,top);const app=$("app");
+  if(top<=4){if(app.classList.contains("barhide")){app.classList.remove("barhide");if(glance)applyGlance(false)}return}
+  if(top-prev>10&&!app.classList.contains("barhide")){app.classList.add("barhide");closeMore()}
+  else if(prev-top>10&&app.classList.contains("barhide"))app.classList.remove("barhide")},true);
+function closeMore(){$("moreMenu").hidden=true;$("moreBtn").setAttribute("aria-expanded","false")}
+$("moreBtn").onclick=e=>{e.stopPropagation();const m=$("moreMenu");if(!m.hidden){closeMore();return}
+  m.hidden=false;$("moreBtn").setAttribute("aria-expanded","true");const r=$("moreBtn").getBoundingClientRect();
+  m.style.top=(r.bottom+6)+"px";m.style.left=Math.max(8,Math.min(r.left,innerWidth-m.offsetWidth-8))+"px";
+  m.querySelector('[data-go="glanceBtn"]').textContent=glance?"Exit week at a glance":"Week at a glance"};
+$("moreMenu").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;closeMore();if(b.dataset.go==="glanceBtn")autoGlance=false;$(b.dataset.go).click()});
+document.addEventListener("click",e=>{if(!$("moreMenu").hidden&&!e.target.closest("#moreMenu,#moreBtn"))closeMore()});
 let pinch0=0;const dist=e=>Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
 $("weekView").addEventListener("touchstart",e=>{if(e.touches.length===2)pinch0=dist(e)},{passive:true});
 $("weekView").addEventListener("touchmove",e=>{if(e.touches.length!==2||!pinch0)return;const r=dist(e)/pinch0;if(r<0.72&&!glance){pinch0=0;setGlance(true)}else if(r>1.35&&glance){pinch0=0;setGlance(false)}},{passive:true});
@@ -2034,8 +2092,8 @@ let booted=false;
 function boot(){
   if(!S){$("app").hidden=true;$("welcome").hidden=false;$("wName").value="";$("wStart").value=TODAY;$("wTz").textContent="Time zone: "+tzLong()+", detected from this device";return}
   $("welcome").hidden=true;$("app").hidden=false;
-  if(!booted){booted=true;let v=null;try{v=localStorage.getItem(KEY+".view")}catch(_){}setView(v||(window.innerWidth<760?"day":"week"));return}
-  renderAll();
+  if(!booted){booted=true;let v=null;try{v=localStorage.getItem(KEY+".view")}catch(_){}setView(v||(window.innerWidth<760?"day":"week"));setLand();return}
+  renderAll();setLand();
 }
 load();boot();route();
 let rzT=0;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{if(S&&view==="week"){fit();if(glance)applyGlance(false)}},150)});
