@@ -238,7 +238,7 @@ td.rate b{font-family:var(--mono)}
 .mp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .mp-grid button{font:600 14px var(--body);padding:12px 6px;border-radius:10px;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);cursor:pointer}
 .mp-grid button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
-.mp-grid button.now{border-color:var(--accent);color:var(--accent)}
+.mp-grid button.cur{border-color:var(--accent);color:var(--accent)}
 /* coach */
 .coach{max-width:720px}
 .cprog{height:4px;border-radius:4px;background:var(--line);overflow:hidden}
@@ -1374,7 +1374,7 @@ window.addEventListener("hashchange",route);
 let mpYear=NOW.getFullYear();
 function renderMP(){
   $("mpYear").textContent=mpYear;
-  $("mpGrid").innerHTML=MON.map((mn,i)=>`<button type="button" data-m="${i}" class="${mpYear===NOW.getFullYear()&&i===NOW.getMonth()?"now":""}" aria-pressed="${mpYear===cursor.getFullYear()&&i===cursor.getMonth()}">${mn}</button>`).join("");
+  $("mpGrid").innerHTML=MON.map((mn,i)=>`<button type="button" data-m="${i}" class="${mpYear===NOW.getFullYear()&&i===NOW.getMonth()?"cur":""}" aria-pressed="${mpYear===cursor.getFullYear()&&i===cursor.getMonth()}">${mn}</button>`).join("");
 }
 function pickMonth(y,mo){
   const days=new Date(y,mo+1,0).getDate();
