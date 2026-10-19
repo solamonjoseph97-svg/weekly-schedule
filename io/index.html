@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://schedule-io-sync.solamonjoseph97.workers.dev; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Schedule I.O.</title>
 <meta name="description" content="Plan your week. See every hour. Share with friends, track your team. Free, offline, no account.">
@@ -2138,7 +2138,7 @@ function boot(){
 }
 /* ============ cloud sync: Google sign-in, automatic background sync ============ */
 // Server: sync-worker/worker.js. Schedules are encrypted at rest there. Device-only settings (view, highlight color) never sync.
-const SYNC_URL="";
+const SYNC_URL="https://schedule-io-sync.solamonjoseph97.workers.dev";
 const SKEY=KEY+".sync";
 let SY={};try{SY=JSON.parse(localStorage.getItem(SKEY)||"{}")||{}}catch(_){SY={}}
 const saveSY=()=>{try{localStorage.setItem(SKEY,JSON.stringify(SY))}catch(_){}};
