@@ -67,6 +67,32 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .nav .btn{padding:8px 11px}
 
 .legend{display:flex;flex-wrap:wrap;gap:8px}
+.sumbtn{font-family:var(--body)!important;display:inline-flex;align-items:center;gap:10px;padding:8px 12px 8px 14px;border-radius:999px;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);font:inherit;font-weight:600;font-size:13.5px;cursor:pointer}
+.sumbtn b{font-family:var(--mono);font-weight:600;font-variant-numeric:tabular-nums}
+.sumbtn .dots{display:inline-flex;gap:3px}.sumbtn .dots i{width:7px;height:7px;border-radius:50%;background:var(--c)}
+.sumbtn .car{font-size:11px;color:var(--muted);transition:transform .2s}.sumbtn[aria-expanded="true"] .car{transform:rotate(180deg)}
+.sumbtn:active{transform:scale(.97)}
+.sumshade{position:fixed;inset:0;z-index:18;background:color-mix(in srgb,var(--bg) 35%,transparent);-webkit-backdrop-filter:blur(10px) saturate(1.1);backdrop-filter:blur(10px) saturate(1.1)}
+.sumpanel{font-family:var(--body);font-size:14px;line-height:1.4;text-transform:none;letter-spacing:normal;position:fixed;z-index:19;width:min(440px,calc(100vw - 24px));max-height:min(72vh,640px);overflow:auto;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 60px -20px rgba(0,0,0,.45);padding:16px;display:flex;flex-direction:column;gap:14px;overscroll-behavior:contain}
+.sumpanel h4{margin:0;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.sumtop{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.sumtop .big{font:700 26px var(--mono);font-variant-numeric:tabular-nums}
+.sumtop .per{font-size:12.5px;color:var(--muted);text-align:right}
+.summeta{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.summeta div{background:var(--bg);border-radius:10px;padding:8px 10px;font-size:12px;color:var(--muted)}
+.summeta b{display:block;font:600 16px var(--mono);color:var(--fg);font-variant-numeric:tabular-nums}
+.catrow{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:baseline}
+.catrow .nm{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;min-width:0}
+.catrow .nm i{flex:none;width:9px;height:9px;border-radius:50%;background:var(--c)}
+.catrow .nm span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.catrow .hr{font:600 14px var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.catrow .bar{grid-column:1/-1;height:6px;border-radius:3px;background:color-mix(in srgb,var(--fg) 8%,transparent);overflow:hidden;position:relative}
+.catrow .bar span{position:absolute;left:0;top:0;bottom:0;background:color-mix(in srgb,var(--c) 35%,transparent);border-radius:3px}
+.catrow .bar em{position:absolute;left:0;top:0;bottom:0;background:var(--c);border-radius:3px}
+.catrow .sub{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;font-family:var(--body);font-size:12px;letter-spacing:0;margin-top:0;color:var(--muted);white-space:nowrap}
+.delta.up{color:var(--ok)}.delta.dn{color:var(--danger)}
+.cirow{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--muted)}
+.cirow b{font-family:var(--mono);color:var(--fg)}
 @media (max-width:640px){.legend{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}.legend::-webkit-scrollbar{display:none}.legend .chip{flex:none}}
 .chip{display:inline-flex;align-items:center;gap:8px;padding:5px 10px 5px 8px;border-radius:999px;background:var(--c-bg);color:var(--c);font-weight:600;font-size:12.5px}
 .chip i{width:8px;height:8px;border-radius:50%;background:var(--c)}
@@ -444,6 +470,8 @@ body{overflow:hidden;overscroll-behavior:none}
   </div>
   <div class="banner" id="viewBanner" hidden></div>
   <div class="legend" id="legend"></div>
+  <div class="sumshade" id="sumShade" hidden></div>
+  <div class="sumpanel" id="sumPanel" role="dialog" aria-label="Time summary" hidden></div>
 
   <section id="weekView" class="board" aria-label="Week view"><div class="zoom" id="zoom"><div class="grid" id="grid"></div></div></section>
   <section id="dayView" hidden aria-label="Day view">
@@ -864,14 +892,49 @@ function renderHeader(){
 }
 const staleCls=p=>(Date.now()-new Date(p.savedAt||0).getTime())>3*864e5?"stale":"";
 function rangeDates(){if(view==="day")return [cursor];if(view==="week")return weekDates(cursor);const f=new Date(cursor.getFullYear(),cursor.getMonth(),1),n=new Date(cursor.getFullYear(),cursor.getMonth()+1,0).getDate();return [...Array(n)].map((_,i)=>addDays(f,i))}
+/* time summary: one button with the total for the current view (day / week / month); opens a floating panel */
+const PER={day:"Day",week:"Week",month:"Month"};
+function prevRange(){if(view==="day")return [addDays(cursor,-1)];if(view==="week")return weekDates(addDays(cursor,-7));
+  const f=new Date(cursor.getFullYear(),cursor.getMonth()-1,1),n=new Date(cursor.getFullYear(),cursor.getMonth(),0).getDate();return [...Array(n)].map((_,i)=>addDays(f,i))}
+function catTotals(sch,dates){const t={},el={};dates.forEach(d=>{const k=iso(d);occ(sch,d).forEach(o=>{const m=o.e-o.s;t[o.cat]=(t[o.cat]||0)+m;
+  el[o.cat]=(el[o.cat]||0)+(k<TODAY?m:k>TODAY?0:Math.min(m,Math.max(0,nowMin-o.s)))})});return {t,el}}
+function periodName(dates){const a=dates[0],z=dates[dates.length-1];if(view==="day")return dLong(a);if(view==="month")return MONL[a.getMonth()]+" "+a.getFullYear();
+  return `${MON[a.getMonth()]} ${a.getDate()} – ${a.getMonth()===z.getMonth()?"":MON[z.getMonth()]+" "}${z.getDate()}`}
 function renderLegend(){
-  const sch=src(),tot={};rangeDates().forEach(d=>occ(sch,d).forEach(o=>tot[o.cat]=(tot[o.cat]||0)+o.e-o.s));
-  const used=sch.cats.filter(c=>tot[c.id]);
-  const st=weekStats(sch,view==="month"?rangeDates():weekDates(cursor),asOf());
-  let html=used.map(c=>`<span class="chip" style="${cvC(c)}"><i></i>${esc(c.name)}<b>${dur(tot[c.id])}</b></span>`).join("");
-  if(st.rate!==null)html+=`<span class="chip" style="--c:var(--ok);--c-bg:var(--ok-bg)"><i></i>Checked in<b>${st.rate}%</b></span>`;
-  $("legend").innerHTML=html||`<span class="hint">Hours per category appear here as you add blocks.</span>`;
+  const sch=src(),dates=rangeDates(),{t}=catTotals(sch,dates);const total=Object.values(t).reduce((x,y)=>x+y,0);
+  const used=sch.cats.filter(c=>t[c.id]).sort((a,b)=>t[b.id]-t[a.id]);const open=!$("sumPanel").hidden;
+  $("legend").innerHTML=total?`<button type="button" class="sumbtn" id="sumBtn" aria-haspopup="dialog" aria-expanded="${open}"><span>${PER[view]} total</span><b>${dur(total)}</b><span class="dots">${used.slice(0,6).map(c=>`<i style="${cvC(c)}"></i>`).join("")}</span><span class="car">▾</span></button>`
+    :`<span class="hint">Time per category appears here as you add blocks.</span>`;
+  if(open)renderSum();
 }
+function renderSum(){
+  const sch=src(),dates=rangeDates(),{t,el}=catTotals(sch,dates),pv=catTotals(sch,prevRange()).t;
+  const total=Object.values(t).reduce((x,y)=>x+y,0),done=Object.values(el).reduce((x,y)=>x+y,0);
+  const isos=dates.map(iso),current=isos[0]<=TODAY&&TODAY<=isos[isos.length-1],past=isos[isos.length-1]<TODAY;
+  const nBlocks=dates.reduce((n,d)=>n+occ(sch,d).length,0);let openMin=0;dates.forEach(d=>{const l=occ(sch,d);const dS=Math.min(sch.dayStart*60,...l.map(o=>o.s)),dE=Math.max(sch.dayEnd*60,...l.map(o=>o.e));freeSlots([l],dS,dE).forEach(([a,b])=>openMin+=b-a)});
+  const used=sch.cats.filter(c=>t[c.id]||pv[c.id]).sort((a,b)=>(t[b.id]||0)-(t[a.id]||0));
+  const last={day:"yesterday",week:"last wk",month:"last mo"}[view];
+  const delta=(a,b)=>{const d=a-b;if(!b&&!a)return "";if(!b)return `<span class="delta up">new vs ${last}</span>`;if(!d)return `<span class="delta">same as ${last}</span>`;return `<span class="delta ${d>0?"up":"dn"}">${d>0?"+":"−"}${dur(Math.abs(d))} vs ${last}</span>`};
+  const rows=used.map(c=>{const m=t[c.id]||0,e=el[c.id]||0;
+    return `<div class="catrow" style="${cvC(c)}"><div class="nm"><i></i><span>${esc(c.name)}</span></div><div class="hr">${m?dur(m):"0m"}</div>
+      <div class="bar"><span style="width:${total?(m/total*100).toFixed(1):0}%"></span>${current?`<em style="width:${total?(e/total*100).toFixed(1):0}%"></em>`:""}</div>
+      <div class="sub"><span>${total?Math.round(m/total*100):0}% of total${current&&m?` · ${dur(e)} done`:""}</span>${delta(m,pv[c.id]||0)}</div></div>`}).join("");
+  const st=weekStats(sch,dates,asOf());
+  const ci=st.rate===null?"":`<div><h4>Check-ins</h4><div class="cirow" style="margin-top:6px"><span><b>${st.rate}%</b> checked in</span><span><b>${st.done}</b> on time</span><span><b>${st.late}</b> late</span><span><b>${st.missed}</b> missed</span></div></div>`;
+  const ptot=Object.values(pv).reduce((x,y)=>x+y,0);
+  $("sumPanel").innerHTML=`<div class="sumtop"><div><h4>${PER[view]} total</h4><div class="big">${dur(total)}</div></div><div class="per">${esc(periodName(dates))}<br>${delta(total,ptot)}</div></div>
+    <div class="summeta"><div><b>${nBlocks}</b>block${nBlocks===1?"":"s"} scheduled</div><div><b>${dur(openMin)}</b>open in your day hours</div>${current?`<div><b>${dur(done)}</b>done so far</div><div><b>${dur(Math.max(0,total-done))}</b>still ahead</div>`:past?`<div><b>${dur(total)}</b>done</div><div><b>0m</b>still ahead</div>`:""}</div>
+    <div><h4>By category</h4></div>${rows||`<p class="note">No blocks in this ${view}.</p>`}${ci}`;
+}
+function placeSum(){const b=$("sumBtn");if(!b)return;const r=b.getBoundingClientRect(),p=$("sumPanel"),w=p.offsetWidth;
+  p.style.left=Math.max(12,Math.min(r.left,innerWidth-w-12))+"px";p.style.top=Math.min(r.bottom+8,innerHeight-80)+"px";p.style.maxHeight=Math.max(240,innerHeight-r.bottom-24)+"px"}
+function openSum(){$("sumPanel").hidden=false;$("sumShade").hidden=false;renderSum();renderLegend();placeSum()}
+function closeSum(){if($("sumPanel").hidden)return;$("sumPanel").hidden=true;$("sumShade").hidden=true;renderLegend()}
+$("legend").addEventListener("click",e=>{if(e.target.closest("#sumBtn")){$("sumPanel").hidden?openSum():closeSum()}});
+$("sumShade").addEventListener("click",closeSum);
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSum()});
+addEventListener("resize",()=>{if(!$("sumPanel").hidden)placeSum()});
+addEventListener("scroll",()=>{if(!$("sumPanel").hidden)placeSum()},{passive:true});
 
 /* ============ week grid ============ */
 let axis={b:[],h:[]}, occMap=new Map();
