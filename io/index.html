@@ -120,11 +120,12 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .item .h{font:500 12px var(--mono);color:var(--c);font-variant-numeric:tabular-nums;line-height:1.35}
 .item .t{font-weight:600;font-size:15.5px;min-width:0;color:var(--fg);overflow-wrap:anywhere}
 .item .k{display:block;font-size:11.5px;font-weight:500;color:var(--c);text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
-.item.live{outline:2px solid var(--accent);outline-offset:2px}
-.item.live{position:relative}
-.item .nowln{position:absolute;left:0;right:0;height:2px;background:var(--accent);pointer-events:none;z-index:2;transform:translateY(-1px)}
-.item .nowln::before{content:"";position:absolute;left:-4px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
-.item .nowln b{position:absolute;right:8px;top:-9px;font:700 10.5px/16px var(--body);letter-spacing:.02em;color:#fff;background:var(--accent);padding:0 7px;border-radius:8px;white-space:nowrap}
+.item .prog{grid-column:1/-1;position:relative;height:22px;margin:-2px 0 -4px}
+.item .prog .trk{position:absolute;left:0;right:0;top:0;height:6px;border-radius:3px;background:color-mix(in srgb,var(--fg) 10%,transparent);overflow:hidden}
+.item .prog .fill{position:absolute;left:0;top:0;bottom:0;background:var(--today)}
+.item .prog .tk{position:absolute;top:0;width:1px;height:6px;background:color-mix(in srgb,var(--fg) 28%,transparent);transform:translateX(-.5px)}
+.item .prog .tk.mj{height:10px;background:color-mix(in srgb,var(--fg) 45%,transparent)}
+.item .prog .lb{position:absolute;top:10px;transform:translateX(-50%);font:500 9.5px/12px var(--mono);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .item.open{--c:var(--muted);background:transparent;box-shadow:none;border:1.5px dashed var(--line-strong);padding:10px 13px}
 .item.open .t{color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-size:13.5px}
 .pill{display:inline-block;font:700 11px var(--body);padding:4px 9px;border-radius:999px;letter-spacing:.03em;white-space:nowrap}
@@ -978,9 +979,13 @@ function freeSlots(lists,from,to){
   const iv=lists.flat().map(o=>[o.s,o.e]).sort((a,b)=>a[0]-b[0]);const out=[];let t=from;
   iv.forEach(([s,e])=>{if(s>t)out.push([t,Math.min(s,to)]);t=Math.max(t,e)});if(t<to)out.push([t,to]);return out.filter(([a,b])=>b>a);
 }
-/* current-time line inside the live day-view item, placed by how far through the block we are, labelled with time left */
-const nowLine=(s,e)=>{const f=Math.min(1,Math.max(0,(nowMin-s)/Math.max(1,e-s)));const left=Math.max(1,e-nowMin);
-  return `<span class="nowln" style="top:${(f*100).toFixed(2)}%" aria-label="${dur(left)} left"><b>${dur(left)} left</b></span>`};
+/* day view: graduated progress bar across the top of the live block; ticks scale to the block length, red fill = time elapsed */
+const nowBar=(s,e)=>{const d=Math.max(1,e-s),f=Math.min(1,Math.max(0,(nowMin-s)/d)),pc=m=>((m-s)/d*100).toFixed(2);
+  const step=d<=30?5:d<=60?10:d<=120?15:d<=240?30:d<=480?60:120;
+  const lstep=[5,10,15,30,60,120,180,240].find(x=>x>=step&&x%step===0&&d/x<=4)||240;
+  let tk="";for(let m=Math.ceil((s+1)/step)*step;m<e;m+=step){const mj=m%lstep===0,p=(m-s)/d;
+    tk+=`<i class="tk${mj?" mj":""}" style="left:${pc(m)}%"></i>`;if(mj&&p>.07&&p<.93)tk+=`<span class="lb" style="left:${pc(m)}%">${fmt(m)}</span>`}
+  return `<span class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="${d}" aria-valuenow="${Math.round(f*d)}" aria-label="${dur(Math.max(1,e-nowMin))} left"><span class="trk"><span class="fill" style="width:${(f*100).toFixed(2)}%"></span></span>${tk}</span>`};
 let dayScrolled=null;
 function renderDay(){
   const sch=src(),dates=weekDates(cursor),ci=iso(cursor);
@@ -992,10 +997,10 @@ function renderDay(){
   let body="",freeTot=0;
   items.forEach(it=>{
     if(it.f){const[s,e]=it.f;freeTot+=e-s;const live=ci===TODAY&&nowMin>=s&&nowMin<e;
-      body+=`<button type="button" class="item open${live?" live":""}" data-s="${s}" data-e="${e}" ${mine()?"":"disabled"}><div class="h">${fmt(s)}<br>${fmt(e)}</div><div class="t">${label}<span class="k">${live?"Now · ":""}${dur(e-s)} free${mine()?" · Tap to fill":""}</span></div>${live?nowLine(s,e):""}</button>`;return}
+      body+=`<button type="button" class="item open${live?" live":""}" data-s="${s}" data-e="${e}" ${mine()?"":"disabled"}>${live?nowBar(s,e):""}<div class="h">${fmt(s)}<br>${fmt(e)}</div><div class="t">${label}<span class="k">${live?`Now · ${dur(Math.max(1,e-nowMin))} left · `:""}${dur(e-s)} free${mine()?" · Tap to fill":""}</span></div></button>`;return}
     const o=it.o;occMap.set(o.key,o);const live=ci===TODAY&&nowMin>=o.s&&nowMin<o.e;const st=status(sch,o,asOf());
     const pill=st?`<span class="pill ${st}">${{done:"Done ✓",late:"Late",missed:"Missed",due:"Check in",upcoming:viewing?"Not reported":"Upcoming"}[st]}</span>`:"";
-    body+=`<button type="button" class="item${live?" live":""}${o.b.flex?" flex":""}" data-key="${esc(o.key)}" style="${cv(sch,o.cat)}"><div class="h">${fmt(o.s)}<br>${fmt(o.e)}</div><div class="t">${esc(o.title)}<span class="k">${esc(catOf(sch,o.cat).name)}${live?" · Now":""} · ${dur(o.e-o.s)}</span></div>${pill}${live?nowLine(o.s,o.e):""}</button>`;
+    body+=`<button type="button" class="item${live?" live":""}${o.b.flex?" flex":""}" data-key="${esc(o.key)}" style="${cv(sch,o.cat)}">${live?nowBar(o.s,o.e):""}<div class="h">${fmt(o.s)}<br>${fmt(o.e)}</div><div class="t">${esc(o.title)}<span class="k">${esc(catOf(sch,o.cat).name)}${live?` · Now · ${dur(Math.max(1,o.e-nowMin))} left`:` · ${dur(o.e-o.s)}`}</span></div>${pill}</button>`;
   });
   $("agenda").innerHTML=`<h2>${dLong(cursor)}${ci===TODAY?" · Today":""}</h2><div class="gap">${dur(freeTot)} ${compare.size?"free for everyone":"open"} between ${fmt(dS)} and ${fmt(dE)}</div>`+body;
   if(ci===TODAY&&dayScrolled!==ci){const lv=$("agenda").querySelector(".item.live");if(lv){dayScrolled=ci;requestAnimationFrame(()=>{try{lv.scrollIntoView({block:"center",behavior:"smooth"})}catch(_){}})}}
