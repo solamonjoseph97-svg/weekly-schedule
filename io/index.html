@@ -352,7 +352,7 @@ body{overflow:hidden;overscroll-behavior:none}
       <button type="button" id="wExample"><b>Start from an example</b><span>A sample work week you can edit or clear.</span></button>
     </div>
     <button type="button" class="btn primary" id="wCoach" style="align-self:flex-start">New to scheduling? Let the coach walk you through it</button>
-    <button type="button" class="btn" id="rcvWelcome" style="align-self:flex-start">Got a schedule from someone? Receive it ▾</button>
+    <button type="button" class="btn" id="rcvWelcome" style="align-self:flex-start">Got a schedule from someone? Add Packet ▾</button>
   </div>
 </div>
 
@@ -393,7 +393,7 @@ body{overflow:hidden;overscroll-behavior:none}
 <aside class="drawer off" id="drawer" aria-label="People" hidden>
   <div class="dhead"><h3>People</h3><button class="btn small" id="drawerClose" type="button">Close</button></div>
   <div class="toggle" role="group" aria-label="People view"><button id="pTabPeople" type="button" aria-pressed="true">Schedules</button><button id="pTabTeam" type="button" aria-pressed="false">Team stats</button></div>
-  <div class="actions"><button class="btn primary" id="dSend" type="button">Send my update</button><button class="btn" id="dRequest" type="button">Request updates</button><button class="btn" id="rcvPeople" type="button">Receive ▾</button></div>
+  <div class="actions"><button class="btn primary" id="dSend" type="button">Send my update</button><button class="btn" id="dRequest" type="button">Request updates</button><button class="btn" id="rcvPeople" type="button">Add Packet ▾</button></div>
   <div id="pPeople" class="rowlist"></div>
   <div id="pTeam" hidden></div>
   <p class="note">Ask them to open Schedule I.O., tap <b>Settings → Save packet</b>, and send it to you. Load it here to see their schedule and team stats.</p>
@@ -484,7 +484,7 @@ body{overflow:hidden;overscroll-behavior:none}
     <p class="note">Your schedule lives only on this device. Save a packet to your Files, AirDrop or text it to back up, move devices, or share with friends and your team.</p>
     <div class="actions">
       <button type="button" class="btn small" id="exportBtn">Save packet</button>
-      <button type="button" class="btn small" id="rcvSettings">Receive ▾</button>
+      <button type="button" class="btn small" id="rcvSettings">Add Packet ▾</button>
     </div>
     <div id="archWrap" class="rowlist">
       <h4>Saved schedules</h4>
@@ -600,7 +600,7 @@ body{overflow:hidden;overscroll-behavior:none}
 <!-- PASTE A LINK -->
 <div class="shade" id="pasteShade" hidden>
   <div class="sheet" role="dialog" aria-labelledby="pasteHead">
-    <h3 id="pasteHead">Receive from text</h3>
+    <h3 id="pasteHead">Add Packet from a text</h3>
     <p class="note">In Messages, press and hold the Schedule I.O. link (or the whole message) and tap <b>Copy</b>. Then come back here.</p>
     <button type="button" class="btn primary" id="pasteGo" style="padding:13px">Paste from clipboard</button>
     <label class="field">Or paste it here<textarea id="pasteText" rows="3" class="row-in" style="font-size:14px;resize:vertical" placeholder="Press and hold, then Paste"></textarea></label>
@@ -623,7 +623,7 @@ body{overflow:hidden;overscroll-behavior:none}
   <div class="asheet" role="dialog" aria-labelledby="rcvHead">
     <div class="panel">
       <div class="grab"></div>
-      <h3 id="rcvHead">Receive a schedule</h3>
+      <h3 id="rcvHead">Add Packet</h3>
       <p class="sub2">Add someone's schedule, a request, or a team invite.</p>
       <div class="tiles">
         <button type="button" class="tile" id="rcvText"><span class="ico msg"><svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.6 2 11c0 2.4 1.3 4.6 3.4 6.1-.2 1.4-.9 2.7-1.9 3.6 2-.1 3.9-.9 5.3-2.1.9.2 2 .4 3.2.4 5.5 0 10-3.6 10-8s-4.5-8-10-8z"/></svg></span>From a text<small>Copy the link in Messages, then paste</small></button>
@@ -1298,7 +1298,7 @@ function sendCandidates(){
   P.forEach(p=>c.push({id:p.id,name:p.name||"Unnamed",phone:p.phone||""}));
   return c;
 }
-const sendBody=()=>`${S.name?S.name+"'s":"My"} latest schedule on Schedule I.O. Tap to load it: ${sendLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Receive → From a text.`;
+const sendBody=()=>`${S.name?S.name+"'s":"My"} latest schedule on Schedule I.O. Tap to load it: ${sendLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Add Packet → From a text.`;
 async function openSend(from){
   sendFrom=from||null;sendLink=await myLink();
   const cands=sendCandidates(),ok=id=>cands.some(c=>c.id===id&&cleanNum(c.phone));sendSel=new Set();
@@ -1324,7 +1324,7 @@ $("dSend").onclick=()=>openSend();
 
 /* --- request updates --- */
 let reqSel=new Set(),reqLink="";
-const reqBody=()=>`Hey! ${S.name||"I"} ${S.name?"is":"am"} asking for your latest Schedule I.O. update. Tap this link, then tap Send: ${reqLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Receive → From a text.`;
+const reqBody=()=>`Hey! ${S.name||"I"} ${S.name?"is":"am"} asking for your latest Schedule I.O. update. Tap this link, then tap Send: ${reqLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Add Packet → From a text.`;
 async function openRequest(){
   if(!P.length){toast("Add someone in People first");return}
   reqLink=appUrl()+"#r="+await pack({from:{id:S.ownerId,name:S.name,phone:S.phone||""}});
@@ -1476,7 +1476,7 @@ $("rcvShade").addEventListener("click",e=>{if(e.target===$("rcvShade"))$("rcvSha
 $("rcvPeople").onclick=openReceive;$("rcvSettings").onclick=openReceive;$("rcvWelcome").onclick=openReceive;
 
 // Safari handoff sheet
-$("hoCopy").onclick=async()=>{try{await navigator.clipboard.writeText(location.href);toast("Link copied. Open Schedule I.O. and tap People → Receive → From a text.")}catch(_){showLinkSheet("Copy this link","Press and hold to copy, then open Schedule I.O. and tap People → Receive → From a text.",location.href,location.href)}};
+$("hoCopy").onclick=async()=>{try{await navigator.clipboard.writeText(location.href);toast("Link copied. Open Schedule I.O. and tap People → Add Packet → From a text.")}catch(_){showLinkSheet("Copy this link","Press and hold to copy, then open Schedule I.O. and tap People → Add Packet → From a text.",location.href,location.href)}};
 $("hoHere").onclick=()=>{$("hoShade").hidden=true;route.skipHandoff=true;const h=handoffHash;handoffHash=null;handleHash(h,true)};
 // send the packet as a file attachment
 $("sendFile").onclick=()=>{$("sendShade").hidden=true;deliverPacket({app:"schedule-io",format:2,savedAt:new Date().toISOString(),owner:{id:S.ownerId,name:S.name,phone:S.phone||""},schedule:linkSchedule()},`${safeName(S.name||S.title)} - Schedule IO - ${localDate()}${PKT_EXT}`)};
