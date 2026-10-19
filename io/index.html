@@ -80,14 +80,14 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .board.glance{overflow:hidden}
 .zoom{overflow:hidden;transition:height .45s cubic-bezier(.2,.7,.2,1)}
 .zoom:not(.zooming){overflow:visible}
-.grid{display:grid;grid-template-columns:62px repeat(7,minmax(140px,1fr));min-width:1042px;transform-origin:0 0;transition:transform .45s cubic-bezier(.2,.7,.2,1)}
+.grid{display:grid;grid-template-columns:44px repeat(7,minmax(140px,1fr));min-width:1042px;transform-origin:0 0;transition:transform .45s cubic-bezier(.2,.7,.2,1)}
 .board.glance .ev{cursor:zoom-in}
 .dh{background:var(--surface);border-bottom:1px solid var(--line-strong);padding:9px 6px 7px;font-family:var(--display);font-weight:700;font-size:15px;text-transform:uppercase;letter-spacing:.04em;text-align:center}
 .dh small{display:block;font:500 11px var(--mono);letter-spacing:.02em;color:var(--muted);text-transform:none}
 .dh.today{color:var(--accent)}
 .dh.today small{color:var(--accent)}
 .times{position:sticky;left:0;z-index:5;background:var(--surface);border-right:1px solid var(--line)}
-.times span{position:absolute;right:8px;transform:translateY(-50%);font:500 10.5px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.times span{position:absolute;right:5px;transform:translateY(-50%);font:500 10px var(--mono);letter-spacing:-.02em;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .col{position:relative;border-left:1px solid var(--line);cursor:copy}
 .col.ro{cursor:default}
 .col.today{background:color-mix(in srgb,var(--accent) 5%,transparent)}
@@ -226,6 +226,63 @@ td.rate b{font-family:var(--mono)}
 @media (max-width:480px){.choice{grid-template-columns:1fr}.item{grid-template-columns:80px 1fr}.item .pill{grid-column:2;justify-self:start}}
 
 
+
+@media (max-width:640px){.grid{grid-template-columns:34px repeat(7,minmax(128px,1fr));min-width:930px}.times span{right:3px;font-size:9.5px}}
+/* flexible blocks: dashed edge */
+.ev.flex{box-shadow:none;border:1.5px dashed color-mix(in srgb,var(--c) 75%,transparent);padding-left:7px}
+.item.flex{box-shadow:none;border:1.5px dashed color-mix(in srgb,var(--c) 75%,transparent)}
+.mchip.flex i{background:transparent;border:1.5px solid var(--c)}
+/* month picker */
+.mp-year{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.mp-year b{font:800 22px var(--display)}
+.mp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.mp-grid button{font:600 14px var(--body);padding:12px 6px;border-radius:10px;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);cursor:pointer}
+.mp-grid button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.mp-grid button.now{border-color:var(--accent);color:var(--accent)}
+/* coach */
+.coach{max-width:720px}
+.cprog{height:4px;border-radius:4px;background:var(--line);overflow:hidden}
+.cprog i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.cstep{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.cbody{display:flex;flex-direction:column;gap:14px}
+.cbody p{margin:0;font-size:15px;line-height:1.5}
+.compare2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.compare2 div{padding:14px;border-radius:12px;background:var(--bg);border:1px solid var(--line-strong);font-size:14px;line-height:1.45}
+.compare2 b{display:block;font:800 18px var(--display);text-transform:uppercase;margin-bottom:4px}
+.personas{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+.personas button{text-align:left;padding:12px 14px;border-radius:12px;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);cursor:pointer;font:inherit;display:flex;flex-direction:column;gap:2px}
+.personas button span{font-size:12.5px;color:var(--muted)}
+.personas button[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.crow2{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:12px;background:var(--bg);border:1px solid var(--line-strong)}
+.crow2 .top{display:flex;gap:8px;align-items:center}
+.crow2 .row-in{padding:8px 10px;font-size:15px;background:var(--surface)}
+.crow2 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.crow2 select,.crow2 input[type=time],.crow2 input[type=number]{font:500 15px var(--body);color:var(--fg);background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;padding:8px;min-width:0;width:100%;-webkit-appearance:none;appearance:none}
+.crow2 label{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;min-width:0}
+.mini{display:flex;gap:4px}
+.mini button{padding:4px 8px;border-radius:6px;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);cursor:pointer;font:700 12px var(--body)}
+.capacity{display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:10px;background:var(--ok-bg);color:var(--ok);font-weight:600;font-size:13.5px}
+.capacity.over{background:var(--bad-bg);color:var(--bad)}
+.warns{display:flex;flex-direction:column;gap:6px}
+.warns div{padding:8px 10px;border-radius:8px;background:var(--warn-bg);color:var(--warn);font-size:13px;font-weight:600}
+.pweek{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;overflow-x:auto}
+.pday{display:flex;flex-direction:column;gap:4px;min-width:88px}
+.pday h5{margin:0;font:700 12px var(--display);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-align:center}
+.pb{font-size:11px;line-height:1.25;padding:4px 6px;border-radius:6px;background:var(--c-bg);box-shadow:inset 3px 0 0 var(--c);color:var(--fg);overflow-wrap:anywhere}
+.pb em{display:block;font:500 10px var(--mono);font-style:normal;color:var(--c)}
+.pb.flex{box-shadow:none;border:1.5px dashed color-mix(in srgb,var(--c) 75%,transparent)}
+.pb.old{opacity:.45}
+.radio{display:flex;flex-direction:column;gap:8px}
+.radio button{text-align:left;padding:12px 14px;border-radius:12px;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);cursor:pointer;font:inherit}
+.radio button span{display:block;font-size:12.5px;color:var(--muted)}
+.radio button[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.chk{display:flex;gap:10px;align-items:center;font-size:14px;cursor:pointer}
+.chk input{width:20px;height:20px;accent-color:var(--accent)}
+.archive{display:flex;gap:8px;align-items:center;padding:10px;border-radius:10px;background:var(--bg);border:1px solid var(--line-strong)}
+.archive div{flex:1;min-width:0}
+.archive b{display:block;font-size:14px}
+.archive span{font-size:12px;color:var(--muted)}
+@media (max-width:560px){.compare2{grid-template-columns:1fr}.crow2 .grid3{grid-template-columns:1fr 1fr}.pweek{grid-template-columns:repeat(7,88px)}}
 /* app shell: the chrome stays put, each view scrolls inside its own frame */
 html,body{height:100%}
 body{overflow:hidden;overscroll-behavior:none}
@@ -265,6 +322,7 @@ body{overflow:hidden;overscroll-behavior:none}
       <button type="button" id="wBlank"><b>Start blank</b><span>An empty week with ready-made categories.</span></button>
       <button type="button" id="wExample"><b>Start from an example</b><span>A sample work week you can edit or clear.</span></button>
     </div>
+    <button type="button" class="btn primary" id="wCoach" style="align-self:flex-start">New to scheduling? Let the coach walk you through it</button>
     <button type="button" class="btn" id="wLoad" style="align-self:flex-start">Have a packet? Load it</button>
   </div>
 </div>
@@ -279,7 +337,7 @@ body{overflow:hidden;overscroll-behavior:none}
     </div>
   </header>
   <div class="toolbar">
-    <div class="nav"><button class="btn" id="prevBtn" type="button" aria-label="Previous">&#8249;</button><button class="btn" id="todayBtn" type="button">Today</button><button class="btn" id="nextBtn" type="button" aria-label="Next">&#8250;</button></div>
+    <div class="nav"><button class="btn" id="prevBtn" type="button" aria-label="Previous">&#8249;</button><button class="btn" id="todayBtn" type="button">Today</button><button class="btn" id="monthPick" type="button" aria-haspopup="dialog">Month ▾</button><button class="btn" id="nextBtn" type="button" aria-label="Next">&#8250;</button></div>
     <div class="toggle" role="group" aria-label="View">
       <button id="vDay" type="button">Day</button><button id="vWeek" type="button">Week</button><button id="vMonth" type="button">Month</button>
     </div>
@@ -287,6 +345,7 @@ body{overflow:hidden;overscroll-behavior:none}
     <span class="sp"></span>
     <button class="btn" id="peopleBtn" type="button">People</button>
     <button class="btn primary" id="addBtn" type="button">+ Add</button>
+    <button class="btn" id="coachBtn" type="button">Coach</button>
     <button class="btn" id="setBtn" type="button">Settings</button>
   </div>
   <div class="banner" id="viewBanner" hidden></div>
@@ -326,6 +385,7 @@ body{overflow:hidden;overscroll-behavior:none}
       <label class="field">End<input id="fEnd" type="time" step="300"></label>
     </div>
     <fieldset class="field">Category<div class="picks cats" id="fCats"></div></fieldset>
+    <fieldset class="field"><span>Type</span><div class="picks sel" id="fType"><button type="button" data-t="fixed">Fixed (a must)</button><button type="button" data-t="flex">Flexible (can move)</button></div></fieldset>
     <p class="err" id="fErr" role="alert"></p>
     <div class="actions">
       <button type="button" class="btn danger" id="fDel">Delete</button>
@@ -397,6 +457,11 @@ body{overflow:hidden;overscroll-behavior:none}
     <div class="actions">
       <button type="button" class="btn small" id="exportBtn">Save packet</button>
       <button type="button" class="btn small" id="importBtn">Load packet</button>
+    </div>
+    <div id="archWrap" class="rowlist">
+      <h4>Saved schedules</h4>
+      <p class="note">Older versions you saved when you replaced your schedule. Restoring one saves your current schedule first.</p>
+      <div id="archList" class="rowlist"></div>
     </div>
     <h4>Start over</h4>
     <div class="actions">
@@ -477,6 +542,31 @@ body{overflow:hidden;overscroll-behavior:none}
     <div class="stack"><button type="button" class="btn primary" id="linkShare">Share</button><button type="button" class="btn" id="linkCopy">Copy link</button><button type="button" class="btn" id="linkClose">Close</button></div>
   </div>
 </div>
+
+<!-- MONTH PICKER -->
+<div class="shade" id="mpShade" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="mpHead" style="max-width:380px">
+    <h3 id="mpHead">Jump to month</h3>
+    <div class="mp-year"><button type="button" class="btn" id="mpPrev" aria-label="Previous year">&#8249;</button><b id="mpYear"></b><button type="button" class="btn" id="mpNext" aria-label="Next year">&#8250;</button></div>
+    <div class="mp-grid" id="mpGrid"></div>
+    <div class="actions"><button type="button" class="btn" id="mpNow">This month</button><span class="sp"></span><button type="button" class="btn" id="mpClose">Close</button></div>
+  </div>
+</div>
+<!-- SCHEDULE COACH -->
+<div class="shade" id="coachShade" hidden>
+  <div class="sheet coach" role="dialog" aria-labelledby="coachHead">
+    <div class="cprog"><i id="coachBar"></i></div>
+    <div class="cstep" id="coachStep"></div>
+    <h3 id="coachHead"></h3>
+    <div class="cbody" id="coachBody"></div>
+    <div class="actions">
+      <button type="button" class="btn" id="coachBack">Back</button>
+      <button type="button" class="btn" id="coachQuit">Exit coach</button>
+      <span class="sp"></span>
+      <button type="button" class="btn primary" id="coachNext">Next</button>
+    </div>
+  </div>
+</div>
 <input type="file" id="importFile" hidden>
 <div class="drop" id="drop" hidden><div>Drop a schedule packet to load it</div></div>
 <div class="toast" id="toast" hidden></div>
@@ -539,7 +629,7 @@ function normalize(d){
   const ds=Number.isInteger(+d.dayStart)?Math.max(0,Math.min(12,+d.dayStart)):6, de=Number.isInteger(+d.dayEnd)?Math.max(ds+4,Math.min(24,+d.dayEnd)):24;
   const blocks=d.blocks.map(r=>{
     if(!r||!/^\d{2}:\d{2}$/.test(r.start)||!/^\d{2}:\d{2}$/.test(r.end)||endM(r.end)<=m(r.start))return null;
-    const base={id:String(r.id||newId()),start:r.start,end:r.end,title:String(r.title||"Untitled").slice(0,60),cat:String(r.cat||cats[0].id)};
+    const base={id:String(r.id||newId()),start:r.start,end:r.end,title:String(r.title||"Untitled").slice(0,60),cat:String(r.cat||cats[0].id),flex:!!r.flex};
     if(r.kind==="once")return isISO(r.date)?{...base,kind:"once",date:r.date}:null;
     if(!(Number.isInteger(+r.day)&&+r.day>=0&&+r.day<7))return null;
     return {...base,kind:"weekly",day:+r.day,skip:Array.isArray(r.skip)?r.skip.filter(isISO):[]};
@@ -549,7 +639,8 @@ function normalize(d){
   const ws=d.weekStart===0||d.weekStart==="0"?0:1;
   return {v:2,ownerId:String(d.ownerId||newId("u")),name:String(d.name||"").slice(0,40),title:String(d.title||"").slice(0,40),weekStart:ws,
     startDate:isISO(d.startDate)?d.startDate:iso(weekStartOf(new Date(),ws)),tz:String(d.tz||tzId()),dayStart:ds,dayEnd:de,cats,metrics,blocks,checkins,
-    phone:String(d.phone||"").slice(0,24),sendTo:Array.isArray(d.sendTo)?d.sendTo.map(String).slice(0,50):[],
+    phone:String(d.phone||"").slice(0,24),buffer:[10,15,20,30].includes(+d.buffer)?+d.buffer:15,
+    archives:Array.isArray(d.archives)?d.archives.filter(a=>a&&Array.isArray(a.blocks)).slice(-12).map(a=>({id:String(a.id||newId("a")),name:String(a.name||"Saved schedule").slice(0,60),date:isISO(a.date)?a.date:iso(new Date()),blocks:a.blocks,cats:Array.isArray(a.cats)?a.cats:[]})):[],sendTo:Array.isArray(d.sendTo)?d.sendTo.map(String).slice(0,50):[],
     team:d.team&&typeof d.team==="object"&&d.team.id?{id:String(d.team.id),name:String(d.team.name||"Team").slice(0,40),cadence:normCad(d.team.cadence),leaderId:String(d.team.leaderId||""),leaderName:String(d.team.leaderName||"").slice(0,40),leaderPhone:String(d.team.leaderPhone||"").slice(0,24)}:null};
 }
 function normCad(c){return {day:Number.isInteger(+c?.day)&&+c.day>=0&&+c.day<7?+c.day:5,time:/^\d{2}:\d{2}$/.test(c?.time)?c.time:"17:00"}}
@@ -619,7 +710,7 @@ function renderHeader(){
   if(view==="day")span=dLong(cursor)+", "+cursor.getFullYear();
   else if(view==="week"){const w=weekDates(cursor),a=w[0],b=w[6];span=a.getMonth()===b.getMonth()?`${MON[a.getMonth()]} ${a.getDate()} – ${b.getDate()}, ${b.getFullYear()}`:`${MON[a.getMonth()]} ${a.getDate()} – ${MON[b.getMonth()]} ${b.getDate()}, ${b.getFullYear()}`}
   else span=MONL[cursor.getMonth()]+" "+cursor.getFullYear();
-  $("sub").textContent=span+" · "+tzLong();
+  $("sub").textContent=span+" · "+tzLong();$("monthPick").textContent=MON[cursor.getMonth()]+" "+cursor.getFullYear()+" ▾";
   const bn=$("viewBanner");
   if(p){bn.hidden=false;bn.innerHTML=`<div><b>Viewing ${p.name?esc(p.name)+"'s":"their"} schedule</b><div class="hint ${staleCls(p)}">Read-only · packet saved ${ago(p.savedAt)}</div></div><button class="btn small" id="backMine" type="button">Back to mine</button>`;$("backMine").onclick=()=>{viewing=null;renderAll();renderPeople()}}
   else if(compare.size){bn.hidden=false;bn.innerHTML=`<div><b>Comparing with ${[...compare].map(id=>esc(person(id)?.name||"?")).join(", ")}</b><div class="hint">Striped areas are when they're busy. Open Periods in day view are times you're all free.</div></div><button class="btn small" id="stopCmp" type="button">Stop comparing</button>`;$("stopCmp").onclick=()=>{compare.clear();renderAll();renderPeople()}}
@@ -671,7 +762,7 @@ function renderWeek(){
     html+=`<div class="col${iso(c.d)===TODAY?" today":""}${mine()?"":" ro"}" data-date="${iso(c.d)}">`;
     c.gh.forEach(g=>html+=`<div class="ghost" data-s="${g.s}" data-e="${g.e}"><span>${esc(g.who)}</span></div>`);
     c.list.forEach(o=>{occMap.set(o.key,o);const[l,n]=ln.get(o.key);const st=status(sch,o,asOf());
-      html+=`<button type="button" class="ev" data-key="${esc(o.key)}" data-l="${l}" data-n="${n}" style="${cv(sch,o.cat)}" aria-label="${esc(o.title)}, ${range(o.s,o.e)}"><span class="t">${esc(o.title)}</span><span class="h">${range(o.s,o.e)}</span>${st&&STICON[st]?`<span class="st st-${st}" title="${st}">${STICON[st]}</span>`:""}</button>`});
+      html+=`<button type="button" class="ev${o.b.flex?" flex":""}" data-key="${esc(o.key)}" data-l="${l}" data-n="${n}" style="${cv(sch,o.cat)}" aria-label="${esc(o.title)}, ${range(o.s,o.e)}"><span class="t">${esc(o.title)}</span><span class="h">${range(o.s,o.e)}</span>${st&&STICON[st]?`<span class="st st-${st}" title="${st}">${STICON[st]}</span>`:""}</button>`});
     html+=`</div>`;
   });
   $("grid").innerHTML=html;
@@ -681,10 +772,11 @@ function renderWeek(){
   if(!glance&&renderWeek.last!==wk){renderWeek.last=wk;const b=$("weekView");const today=dates.some(d=>iso(d)===TODAY);
     const t=today?Math.max(axis.b[0],nowMin-60):Math.min(...cols.flatMap(c=>c.list.map(o=>o.s)),sch.dayStart*60+120);b.scrollTop=Math.max(0,y(t)-8)}
 }
+const axisLabel=t=>window.innerWidth<=640?clock(t)+ap(t)[0].toLowerCase():fmt(t).replace(" ","");
 function place(){
   const top=axis.b[0],bot=axis.b[axis.b.length-1],total=y(bot);
   const times=$("times");if(!times)return;times.style.height=total+"px";
-  let tl="";for(let t=top+60;t<bot;t+=60)tl+=`<span style="top:${y(t)}px">${fmt(t).replace(" ","")}</span>`;
+  let tl="";for(let t=top+60;t<bot;t+=60)tl+=`<span style="top:${y(t)}px">${axisLabel(t)}</span>`;
   times.innerHTML=tl;
   document.querySelectorAll("#grid .col").forEach(c=>{
     c.style.height=total+"px";c.querySelectorAll(".hl,.now").forEach(x=>x.remove());
@@ -768,7 +860,7 @@ function renderDay(){
       body+=`<button type="button" class="item open${live?" live":""}" data-s="${s}" data-e="${e}" ${mine()?"":"disabled"}><div class="h">${fmt(s)}<br>${fmt(e)}</div><div class="t">${label}<span class="k">${live?"Now · ":""}${dur(e-s)} free${mine()?" · Tap to fill":""}</span></div></button>`;return}
     const o=it.o;occMap.set(o.key,o);const live=ci===TODAY&&nowMin>=o.s&&nowMin<o.e;const st=status(sch,o,asOf());
     const pill=st?`<span class="pill ${st}">${{done:"Done ✓",late:"Late",missed:"Missed",due:"Check in",upcoming:viewing?"Not reported":"Upcoming"}[st]}</span>`:"";
-    body+=`<button type="button" class="item${live?" live":""}" data-key="${esc(o.key)}" style="${cv(sch,o.cat)}"><div class="h">${fmt(o.s)}<br>${fmt(o.e)}</div><div class="t">${esc(o.title)}<span class="k">${esc(catOf(sch,o.cat).name)}${live?" · Now":""} · ${dur(o.e-o.s)}</span></div>${pill}</button>`;
+    body+=`<button type="button" class="item${live?" live":""}${o.b.flex?" flex":""}" data-key="${esc(o.key)}" style="${cv(sch,o.cat)}"><div class="h">${fmt(o.s)}<br>${fmt(o.e)}</div><div class="t">${esc(o.title)}<span class="k">${esc(catOf(sch,o.cat).name)}${live?" · Now":""} · ${dur(o.e-o.s)}</span></div>${pill}</button>`;
   });
   $("agenda").innerHTML=`<h2>${dLong(cursor)}${ci===TODAY?" · Today":""}</h2><div class="gap">${dur(freeTot)} ${compare.size?"free for everyone":"open"} between ${fmt(dS)} and ${fmt(dE)}</div>`+body;
 }
@@ -783,7 +875,7 @@ function renderMonth(){
   while(d<=last||mon0(d)!==mon0(start)){
     const k=iso(d),list=occ(sch,d).sort((a,b)=>a.s-b.s),out=d.getMonth()!==cursor.getMonth();
     const st=weekStats(sch,[d],asOf());const rate=st.rate!==null&&k<=TODAY?`<span class="rate">${st.done+st.late}/${st.done+st.late+st.missed}</span>`:"";
-    html+=`<button type="button" class="mc${out?" out":""}${k===TODAY?" today":""}" data-d="${k}" aria-label="${dLong(d)}, ${list.length} blocks"><span class="dn"><b>${d.getDate()}</b>${rate}</span><span class="mchips">${list.slice(0,3).map(o=>`<span class="mchip" style="${cv(sch,o.cat)}"><i></i><em>${clock(o.s)}</em><span>${esc(o.title)}</span></span>`).join("")}${list.length>3?`<span class="more">+${list.length-3} more</span>`:""}</span></button>`;
+    html+=`<button type="button" class="mc${out?" out":""}${k===TODAY?" today":""}" data-d="${k}" aria-label="${dLong(d)}, ${list.length} blocks"><span class="dn"><b>${d.getDate()}</b>${rate}</span><span class="mchips">${list.slice(0,3).map(o=>`<span class="mchip${o.b.flex?" flex":""}" style="${cv(sch,o.cat)}"><i></i><em>${clock(o.s)}</em><span>${esc(o.title)}</span></span>`).join("")}${list.length>3?`<span class="more">+${list.length-3} more</span>`:""}</span></button>`;
     d=addDays(d,1);
     if(d>last&&mon0(d)===mon0(start))break;
   }
@@ -862,11 +954,12 @@ function syncEditor(){
   $("fDaysWrap").hidden=!weekly||only;$("fDateWrap").hidden=weekly||only;
   [...$("fDays").children].forEach(b=>b.setAttribute("aria-pressed",ed.days.has(+b.dataset.i)));
   [...$("fCats").children].forEach(b=>b.setAttribute("aria-pressed",b.dataset.k===ed.cat));
+  [...$("fType").children].forEach(b=>b.setAttribute("aria-pressed",(b.dataset.t==="flex")===ed.flex));
   $("fDaysLabel").textContent=ed.o?"Days (select more to copy it)":"Days";
 }
 function openEditor(o,preset){
   const date=o?o.date:(preset?.date||iso(cursor));const d=parseD(date);
-  ed={o:o||null,repeat:o?o.b.kind:lastRepeat,days:new Set([o&&o.b.kind==="weekly"?o.b.day:mon0(d)]),cat:o?o.cat:(S.cats.some(c=>c.id===lastCat)?lastCat:S.cats[0]?.id),scope:"all",date};
+  ed={o:o||null,repeat:o?o.b.kind:lastRepeat,days:new Set([o&&o.b.kind==="weekly"?o.b.day:mon0(d)]),cat:o?o.cat:(S.cats.some(c=>c.id===lastCat)?lastCat:S.cats[0]?.id),scope:"all",date,flex:o?!!o.b.flex:false};
   $("fHead").textContent=o?"Edit block":"Add block";
   $("fTitle").value=o?o.title:"";
   const s=o?o.s:(preset?.s??540),e=o?o.e:Math.min(1440,preset?.e??s+60);
@@ -882,6 +975,7 @@ $("fScope").onclick=e=>{const b=e.target.closest("button");if(!b)return;ed.scope
 $("fRepeat").onclick=e=>{const b=e.target.closest("button");if(!b)return;ed.repeat=b.dataset.r;syncEditor()};
 $("fDays").onclick=e=>{const b=e.target.closest("button");if(!b)return;const i=+b.dataset.i;if(ed.days.has(i)){if(ed.days.size>1)ed.days.delete(i)}else ed.days.add(i);syncEditor()};
 $("fCats").onclick=e=>{const b=e.target.closest("button");if(!b)return;ed.cat=b.dataset.k;syncEditor()};
+$("fType").onclick=e=>{const b=e.target.closest("button");if(!b)return;ed.flex=b.dataset.t==="flex";syncEditor()};
 $("fCancel").onclick=closeEditor;
 $("shade").addEventListener("click",e=>{if(e.target===$("shade"))closeEditor()});
 $("form").addEventListener("submit",e=>{
@@ -893,7 +987,7 @@ $("form").addEventListener("submit",e=>{
   if(!ed.cat)return $("fErr").textContent="Add a category in Settings first.";
   if(ed.repeat==="once"&&ed.scope!=="one"&&!isISO($("fDate").value))return $("fErr").textContent="Pick a date.";
   lastCat=ed.cat;lastRepeat=ed.repeat;
-  const base={start:st,end:en,title,cat:ed.cat};
+  const base={start:st,end:en,title,cat:ed.cat,flex:!!ed.flex};
   const o=ed.o;
   if(o&&o.b.kind==="weekly"&&ed.scope==="one"){
     o.b.skip.push(o.date);S.blocks.push({id:newId(),kind:"once",date:o.date,...base});
@@ -977,7 +1071,7 @@ function openSettings(){
   $("sStart").innerHTML=Array.from({length:13},(_,h)=>`<option value="${h}">${hourLabel(h)}</option>`).join("");
   $("sEnd").innerHTML=Array.from({length:13},(_,i)=>i+12).map(h=>`<option value="${h}">${hourLabel(h)}</option>`).join("");
   $("sStart").value=S.dayStart;$("sEnd").value=S.dayEnd;$("sTz").textContent="Time zone: "+tzLong()+(tzId()?" ("+tzId()+")":"")+", from this device";
-  $("sPhone").value=S.phone||"";renderTeamSettings();
+  $("sPhone").value=S.phone||"";renderTeamSettings();renderArchives();
   renderCats();renderMetrics();$("setShade").hidden=false;
 }
 function closeSettings(){$("setShade").hidden=true;commit();if(!$("drawer").hidden)renderPeople()}
@@ -1110,7 +1204,7 @@ function linkSchedule(){
   const cut=iso(addDays(new Date(),-35)),ck={};
   for(const[k,v]of Object.entries(S.checkins))if(k.split("|")[1]>=cut)ck[k]=v;
   const blocks=S.blocks.filter(b=>b.kind==="weekly"||b.date>=cut).map(b=>b.kind==="weekly"?{...b,skip:b.skip.filter(d=>d>=cut)}:b);
-  const {sendTo,...rest}=S;return {...rest,blocks,checkins:ck};
+  const {sendTo,archives,...rest}=S;return {...rest,blocks,checkins:ck};
 }
 async function myLink(){return appUrl()+"#p="+await pack({app:"schedule-io",format:2,savedAt:new Date().toISOString(),owner:{id:S.ownerId,name:S.name,phone:S.phone||""},schedule:linkSchedule()})}
 const staleList=()=>P.filter(p=>(Date.now()-new Date(p.savedAt||0).getTime())>3*864e5);
@@ -1276,6 +1370,247 @@ async function route(){
 }
 window.addEventListener("hashchange",route);
 
+/* ============ month picker ============ */
+let mpYear=NOW.getFullYear();
+function renderMP(){
+  $("mpYear").textContent=mpYear;
+  $("mpGrid").innerHTML=MON.map((mn,i)=>`<button type="button" data-m="${i}" class="${mpYear===NOW.getFullYear()&&i===NOW.getMonth()?"now":""}" aria-pressed="${mpYear===cursor.getFullYear()&&i===cursor.getMonth()}">${mn}</button>`).join("");
+}
+function pickMonth(y,mo){
+  const days=new Date(y,mo+1,0).getDate();
+  cursor=(y===NOW.getFullYear()&&mo===NOW.getMonth())?parseD(TODAY):new Date(y,mo,Math.min(view==="month"?1:1,days));
+  $("mpShade").hidden=true;renderAll();
+}
+$("monthPick").onclick=()=>{mpYear=cursor.getFullYear();renderMP();$("mpShade").hidden=false};
+$("mpPrev").onclick=()=>{mpYear--;renderMP()};$("mpNext").onclick=()=>{mpYear++;renderMP()};
+$("mpGrid").onclick=e=>{const b=e.target.closest("button");if(b)pickMonth(mpYear,+b.dataset.m)};
+$("mpNow").onclick=()=>pickMonth(NOW.getFullYear(),NOW.getMonth());
+$("mpClose").onclick=()=>$("mpShade").hidden=true;
+$("mpShade").addEventListener("click",e=>{if(e.target===$("mpShade"))$("mpShade").hidden=true});
+
+/* ============ saved schedules (archives) ============ */
+function archiveCurrent(label){
+  if(!S.blocks.length)return;
+  S.archives=[...(S.archives||[]),{id:newId("a"),name:label||`Schedule saved ${dShort(new Date())}, ${new Date().getFullYear()}`,date:iso(new Date()),blocks:JSON.parse(JSON.stringify(S.blocks)),cats:JSON.parse(JSON.stringify(S.cats))}].slice(-12);
+}
+function renderArchives(){
+  const a=S.archives||[];$("archWrap").hidden=!a.length;
+  $("archList").innerHTML=a.slice().reverse().map(x=>`<div class="archive" data-id="${esc(x.id)}"><div><b>${esc(x.name)}</b><span>${x.blocks.length} blocks · saved ${esc(dShort(parseD(x.date)))}</span></div><button type="button" class="btn small" data-act="restore">Restore</button><button type="button" class="btn small danger" data-act="del">Delete</button></div>`).join("");
+}
+$("archList").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-act]");if(!b)return;const id=b.closest(".archive").dataset.id;const a=S.archives.find(x=>x.id===id);if(!a)return;
+  if(b.dataset.act==="del"){armed(b,"Delete","Tap again",()=>{S.archives=S.archives.filter(x=>x.id!==id);persist();renderArchives();toast("Saved schedule deleted")});return}
+  armed(b,"Restore","Tap again to restore",()=>{
+    archiveCurrent(`Before restore · ${dShort(new Date())}`);
+    a.cats.forEach(c=>{if(c&&c.id&&!S.cats.some(x=>x.id===c.id))S.cats.push({id:String(c.id),name:String(c.name||"Category"),color:colorOf(c.color),track:c.track!==false})});
+    S.blocks=JSON.parse(JSON.stringify(a.blocks)).map(r=>({...r,id:newId()}));S.blocks=normalize({...S,blocks:S.blocks}).blocks;
+    S.archives=S.archives.filter(x=>x.id!==id);persist();renderArchives();renderCats();toast("Schedule restored")});
+});
+
+/* ============ schedule coach ============ */
+const MUST_TYPES={work:["Work","work","Work"],school:["Class","study","School / classes"],commute:["Commute","routine","Commute"],kids:["Kids pickup","social","Kids drop-off / pickup"],worship:["Church","social","Worship"],appt:["Appointment","meetings","Recurring appointment"],other:["","personal","Something else"]};
+const WANT_TYPES={exercise:["Exercise","fitness"],study:["Study","study"],business:["Side business","projects"],reading:["Reading","personal"],family:["Family time","social"],friends:["Friends","social"],hobby:["Hobby","personal"],rest:["Rest","personal"],other:["","personal"]};
+const CAT_DEFAULTS={work:["Work","indigo"],study:["Study","orange"],fitness:["Fitness","purple"],meetings:["Meetings","green"],personal:["Personal","teal"],social:["Family & Friends","pink"],routine:["Routine","blue"],projects:["Projects","yellow"]};
+const WEEKDAYS=[0,1,2,3,4],ALLDAYS=[0,1,2,3,4,5,6];
+const PERSONAS={
+  nine5:{t:"9-to-5 worker",d:"Office or remote job on weekdays",wake:"06:30",bed:"22:30",musts:[["work","Work",WEEKDAYS,"09:00","17:00"],["commute","Commute to work",WEEKDAYS,"08:15","08:45"],["commute","Commute home",WEEKDAYS,"17:15","17:45"]],wants:[["exercise",3,60,"evening",[0,2,4]],["family",5,60,"evening",ALLDAYS],["reading",2,30,"evening",ALLDAYS]]},
+  student:{t:"Student",d:"Classes, studying and a social life",wake:"07:30",bed:"23:30",musts:[["school","Classes",WEEKDAYS,"09:00","14:00"]],wants:[["study",10,90,"afternoon",WEEKDAYS],["exercise",3,60,"any",[1,3,5]],["friends",4,120,"evening",[4,5]]]},
+  shift:{t:"Shift worker",d:"Evening or rotating shifts",wake:"09:30",bed:"00:00",musts:[["work","Shift",[1,2,3,4,5],"15:00","23:00"]],wants:[["exercise",3,60,"morning",[1,3,5]],["rest",4,60,"any",[0,6]],["family",4,120,"any",[0,6]]]},
+  founder:{t:"Entrepreneur",d:"Self-employed or building a business",wake:"06:00",bed:"22:30",musts:[["work","Deep work",WEEKDAYS,"08:00","12:00"],["appt","Client calls",WEEKDAYS,"13:00","15:00"]],wants:[["business",6,120,"afternoon",WEEKDAYS],["exercise",4,60,"morning",[0,1,3,4]],["study",3,60,"evening",[1,3]],["family",5,60,"evening",ALLDAYS]]},
+  parent:{t:"Parent",d:"Work plus school runs and family",wake:"06:00",bed:"22:00",musts:[["work","Work",WEEKDAYS,"09:00","17:00"],["kids","Kids drop-off",WEEKDAYS,"07:30","08:15"],["kids","Kids pickup",WEEKDAYS,"17:15","18:00"]],wants:[["family",7,60,"evening",ALLDAYS],["exercise",2,30,"morning",[0,2,4]],["rest",3,60,"evening",[5,6]]]},
+  scratch:{t:"Start from scratch",d:"A blank slate",wake:"07:00",bed:"23:00",musts:[],wants:[]}
+};
+const STEPS=["Schedule vs. calendar","Pick a starting point","Your day","Must-dos","Daily essentials","Wants","Review"];
+let W=null;
+const cid=()=>"c"+Math.random().toString(36).slice(2,8);
+function freshCoach(){return {step:0,persona:null,wake:"07:00",bed:"23:00",routine:{on:true,min:30},wind:{on:true,min:30},musts:[],meals:{b:{on:true,time:"07:30",min:30,label:"Breakfast"},l:{on:true,time:"12:00",min:60,label:"Lunch"},d:{on:true,time:"18:30",min:60,label:"Dinner"}},wants:[],buffer:S?S.buffer||15:15,mode:"add",archive:true,trackWants:true}}
+function applyPersona(k){
+  const p=PERSONAS[k];W.persona=k;W.wake=p.wake;W.bed=p.bed;
+  W.musts=p.musts.map(([type,title,days,start,end])=>({id:cid(),type,title,days:[...days],start,end}));
+  W.wants=p.wants.map(([type,hours,len,tod,days])=>({id:cid(),type,title:WANT_TYPES[type][0],hours,len,tod,days:[...days]}));
+  if(k==="shift"){W.meals.l.time="13:30";W.meals.d.on=false}
+}
+function openCoach(){if(!S)return;W=freshCoach();document.querySelectorAll(".shade").forEach(x=>x.hidden=true);$("coachShade").hidden=false;renderCoach()}
+const bedM=()=>{const v=m(W.bed);return v<=m(W.wake)?1440:v}; // bed after midnight is capped at midnight
+const wakeM=()=>m(W.wake);
+const dayOrderM=()=>[...Array(7)].map((_,i)=>((S.weekStart+i)%7+6)%7);
+const dname=d=>WD[(d+1)%7];
+function coachFixedRaw(){
+  const out=[],add=(day,s,e,title,cat,kind)=>{if(e>s)out.push({day,s,e,title,cat,flex:false,kind})};
+  ALLDAYS.forEach(d=>{
+    if(W.routine.on)add(d,wakeM(),wakeM()+ +W.routine.min,"Morning routine","routine","edge");
+    if(W.wind.on)add(d,bedM()- +W.wind.min,bedM(),"Wind down","routine","edge");
+    Object.values(W.meals).forEach(ml=>{if(ml.on){const s0=m(ml.time);add(d,s0,Math.min(1440,s0+ +ml.min),ml.label,"personal","meal")}});
+  });
+  W.musts.forEach(r=>{if(!r.start||!r.end)return;const s0=m(r.start),e0=endM(r.end);r.days.forEach(d=>add(d,s0,e0,r.title||MUST_TYPES[r.type][0]||"Must-do",MUST_TYPES[r.type][1],"must"))});
+  return out;
+}
+function coachFixed(){
+  let fx=coachFixedRaw();const musts=fx.filter(x=>x.kind==="must");
+  // a meal that falls inside a must-do (lunch during work or class) happens there; don't block it separately
+  fx=fx.filter(x=>x.kind!=="meal"||!musts.some(mu=>mu.day===x.day&&x.s>=mu.s&&x.e<=mu.e));
+  // when adding to an existing schedule, skip anything you already have
+  if(W.mode==="add"){const ex=existingByDay();fx=fx.filter(x=>!ex[x.day].some(o=>o.title.trim().toLowerCase()===x.title.trim().toLowerCase()&&(x.kind!=="must"||(o.s<x.e&&x.s<o.e))))}
+  return fx;
+}
+function existingByDay(){ // existing weekly blocks kept when adding
+  const by=ALLDAYS.map(()=>[]);if(W.mode!=="add")return by;
+  S.blocks.filter(b=>b.kind==="weekly").forEach(b=>by[b.day].push({s:m(b.start),e:endM(b.end),title:b.title,cat:b.cat,old:true,flex:b.flex}));return by;
+}
+function union(iv){const a=iv.map(x=>[x.s,x.e]).sort((p,q)=>p[0]-q[0]);const r=[];a.forEach(([s0,e0])=>{if(r.length&&s0<=r[r.length-1][1])r[r.length-1][1]=Math.max(r[r.length-1][1],e0);else r.push([s0,e0])});return r}
+function freeMinutes(){
+  const fx=coachFixed(),ex=existingByDay();let tot=0;
+  ALLDAYS.forEach(d=>{const busy=union([...fx.filter(x=>x.day===d),...ex[d]].map(x=>({s:Math.max(x.s,wakeM()),e:Math.min(x.e,bedM())})).filter(x=>x.e>x.s));tot+=(bedM()-wakeM())-busy.reduce((a,[s0,e0])=>a+e0-s0,0)});
+  return Math.max(0,tot);
+}
+const wantMinutes=()=>W.wants.reduce((a,w)=>a+Math.max(0,+w.hours||0)*60,0);
+const TOD={morning:[360,720],afternoon:[720,1020],evening:[1020,1320],any:[0,1440]};
+function placeWants(){
+  const fx=coachFixed(),ex=existingByDay(),buf=Math.max(10,+W.buffer||15);
+  const occ=ALLDAYS.map(d=>[...fx.filter(x=>x.day===d),...ex[d]]);
+  const placed=[],misses=[];
+  W.wants.forEach(w=>{
+    const len=Math.max(15,+w.len||60),need=Math.ceil(Math.max(0,+w.hours||0)*60/len);if(!need||!w.days.length)return;
+    const [t0,t1]=TOD[w.tod]||TOD.any,lo=Math.max(t0,wakeM()),hi=Math.min(t1,bedM());
+    const days=dayOrderM().filter(d=>w.days.includes(d));const count={};let got=0,ptr=0;
+    const fits=(d,st)=>occ[d].every(x=>st>=x.e+buf||st+len+buf<=x.s);
+    const slot=d=>{for(let st=Math.ceil(lo/15)*15;st+len<=hi;st+=15)if(fits(d,st))return st;return null};
+    for(let n=0;n<need;n++){
+      let done=false;
+      for(const pass of [0,1,2,3,4,5,6]){ // prefer days with fewer sessions of this want
+        for(let k=0;k<days.length&&!done;k++){const d=days[(ptr+k)%days.length];if((count[d]||0)!==pass)continue;const st=slot(d);
+          if(st!==null){const p={day:d,s:st,e:st+len,title:w.title||WANT_TYPES[w.type][0]||"Goal",cat:WANT_TYPES[w.type][1],flex:true};occ[d].push(p);placed.push(p);count[d]=(count[d]||0)+1;got++;ptr=(days.indexOf(d)+1)%days.length;done=true}}
+        if(done)break;
+      }
+      if(!done)break;
+    }
+    if(got<need)misses.push({w,got,need});
+  });
+  return {placed,misses};
+}
+function fixedWarnings(){
+  const fx=coachFixed(),ex=existingByDay(),warns=[];
+  if(bedM()-wakeM()>17*60)warns.push(`That leaves less than 7 hours of sleep. Most people need 7 to 9.`);
+  if(m(W.bed)<=m(W.wake)&&W.bed!=="00:00")warns.push("Bedtimes after midnight are shown as midnight.");
+  ALLDAYS.forEach(d=>{
+    const list=[...fx.filter(x=>x.day===d),...ex[d]].sort((a,b)=>a.s-b.s);
+    for(let i=0;i<list.length;i++)for(let j=i+1;j<list.length;j++){const a=list[i],b=list[j];if(b.s<a.e){const msg=`${dname(d)}: ${a.title} and ${b.title} overlap (${range(Math.max(a.s,b.s),Math.min(a.e,b.e))}).`;if(!warns.includes(msg))warns.push(msg)}}
+    fx.filter(x=>x.day===d&&(x.s<wakeM()||x.e>bedM())).forEach(x=>{const msg=`${dname(d)}: ${x.title} is outside your waking hours.`;if(!warns.includes(msg))warns.push(msg)});
+  });
+  return warns.slice(0,8);
+}
+const hrs=mins=>{const h=Math.round(mins/6)/10;return (h%1?h.toFixed(1):h)+"h"};
+function capacityHtml(withWants){
+  const free=freeMinutes(),want=wantMinutes();
+  if(!withWants)return `<div class="capacity">Free time left each week after these: <b>${hrs(free)}</b></div>`;
+  const over=want>free;return `<div class="capacity${over?" over":""}">${over?`You're asking for ${hrs(want)} but only have ${hrs(free)} free. Trim hours or drop the lowest priorities.`:`Wants: ${hrs(want)} of your ${hrs(free)} free time each week.`}</div>`;
+}
+const dayChips=(days,role,id)=>`<div class="picks sel">${dayOrderM().map(d=>`<button type="button" data-role="${role}" data-id="${id}" data-day="${d}" aria-pressed="${days.includes(d)}">${dname(d)}</button>`).join("")}</div>`;
+function renderCoach(){
+  const st=W.step,b=$("coachBody");
+  $("coachBar").style.width=((st+1)/STEPS.length*100)+"%";
+  $("coachStep").textContent=`Step ${st+1} of ${STEPS.length}`;$("coachHead").textContent=STEPS[st];
+  $("coachBack").hidden=st===0;$("coachNext").textContent=st===STEPS.length-1?(W.mode==="replace"?"Replace my schedule":"Add to my schedule"):st===0?"Let's start":"Next";
+  let h="";
+  if(st===0){
+    h=`<div class="compare2"><div><b>Calendar</b>Answers <i>where do I need to be on a date?</i> Dentist on Nov 3, a wedding, a flight. One-off events.</div><div><b>Schedule</b>Answers <i>how do I spend my week?</i> Work, gym, study, family. Your repeating default.</div></div>
+    <p>Rule of thumb: <b>appointments go on your calendar, priorities go on your schedule.</b> A good schedule protects time for what matters before the week fills up.</p>
+    <p>We'll build yours in order: first the things you <b>must</b> do, then daily essentials, then the things you <b>want</b> to make time for. The coach fits your wants into the time that's left.</p>`;
+  }else if(st===1){
+    h=`<p>Pick what sounds most like you. It pre-fills a typical week that you'll adjust next.</p><div class="personas">${Object.entries(PERSONAS).map(([k,p])=>`<button type="button" data-persona="${k}" aria-pressed="${W.persona===k}"><b>${esc(p.t)}</b><span>${esc(p.d)}</span></button>`).join("")}</div>`;
+  }else if(st===2){
+    h=`<p>These set the edges of your day. Everything else fits between them.</p>
+    <div class="crow2"><div class="grid3"><label>Wake up<input type="time" step="900" data-f="wake" value="${W.wake}"></label><label>Go to bed<input type="time" step="900" data-f="bed" value="${W.bed}"></label><label>Sleep<input type="text" disabled value="${hrs(1440-(bedM()-wakeM()))}"></label></div></div>
+    <label class="chk"><input type="checkbox" data-f="routine.on" ${W.routine.on?"checked":""}> Morning routine after waking</label>
+    <div class="crow2" ${W.routine.on?"":"hidden"}><label>Minutes<select data-f="routine.min">${[15,30,45,60].map(v=>`<option ${+W.routine.min===v?"selected":""}>${v}</option>`).join("")}</select></label></div>
+    <label class="chk"><input type="checkbox" data-f="wind.on" ${W.wind.on?"checked":""}> Wind-down time before bed</label>
+    <div class="crow2" ${W.wind.on?"":"hidden"}><label>Minutes<select data-f="wind.min">${[15,30,45,60].map(v=>`<option ${+W.wind.min===v?"selected":""}>${v}</option>`).join("")}</select></label></div>
+    ${fixedWarnings().filter(w=>/sleep|midnight/.test(w)).map(w=>`<div class="warns"><div>${esc(w)}</div></div>`).join("")}`;
+  }else if(st===3){
+    h=`<p><b>Must-dos are fixed.</b> Things you can't move: work hours, classes, commutes, school runs, worship. Add each one with its days and times.</p>
+    <div class="actions">${Object.entries(MUST_TYPES).map(([k,v])=>`<button type="button" class="btn small" data-addmust="${k}">+ ${esc(v[2])}</button>`).join("")}</div>
+    <div class="rowlist">${W.musts.length?W.musts.map(r=>`<div class="crow2"><div class="top"><input class="row-in" data-must="${r.id}" data-k="title" value="${esc(r.title)}" placeholder="${esc(MUST_TYPES[r.type][2])}" maxlength="60"><button type="button" class="btn small danger" data-rmmust="${r.id}">Remove</button></div>
+      ${dayChips(r.days,"mustday",r.id)}<div class="grid3"><label>Start<input type="time" step="300" data-must="${r.id}" data-k="start" value="${r.start}"></label><label>End<input type="time" step="300" data-must="${r.id}" data-k="end" value="${r.end}"></label></div></div>`).join(""):`<p class="note">Nothing fixed yet. Use the buttons above, or tap Next if your week has no fixed commitments.</p>`}</div>
+    ${capacityHtml(false)}`;
+  }else if(st===4){
+    h=`<p>Meals and other daily basics. Turn off anything you don't want blocked out.</p>
+    <div class="rowlist">${Object.entries(W.meals).map(([k,ml])=>`<div class="crow2"><label class="chk"><input type="checkbox" data-meal="${k}" data-k="on" ${ml.on?"checked":""}> ${esc(ml.label)}</label>
+      <div class="grid3" ${ml.on?"":"hidden"}><label>Time<input type="time" step="300" data-meal="${k}" data-k="time" value="${ml.time}"></label><label>Length<select data-meal="${k}" data-k="min">${[15,30,45,60,90].map(v=>`<option value="${v}" ${+ml.min===v?"selected":""}>${v} min</option>`).join("")}</select></label></div></div>`).join("")}</div>
+    ${capacityHtml(false)}`;
+  }else if(st===5){
+    h=`<p><b>Wants are flexible.</b> Things you want to make time for. Say how many hours a week, and the coach finds the time. <b>Order is priority:</b> the top item gets placed first.</p>
+    <div class="actions">${Object.entries(WANT_TYPES).map(([k,v])=>`<button type="button" class="btn small" data-addwant="${k}">+ ${esc(v[0]||"Something else")}</button>`).join("")}</div>
+    <div class="rowlist">${W.wants.length?W.wants.map((w,i)=>`<div class="crow2"><div class="top"><b style="font:700 13px var(--mono);color:var(--muted)">${i+1}</b><input class="row-in" data-want="${w.id}" data-k="title" value="${esc(w.title)}" placeholder="What is it?" maxlength="60">
+      <span class="mini"><button type="button" data-mv="${w.id}" data-dir="-1" aria-label="Higher priority">↑</button><button type="button" data-mv="${w.id}" data-dir="1" aria-label="Lower priority">↓</button></span><button type="button" class="btn small danger" data-rmwant="${w.id}">Remove</button></div>
+      <div class="grid3"><label>Hours / week<input type="number" min="0.5" max="40" step="0.5" inputmode="decimal" data-want="${w.id}" data-k="hours" value="${w.hours}"></label>
+      <label>Each session<select data-want="${w.id}" data-k="len">${[[30,"30 min"],[45,"45 min"],[60,"1 hour"],[90,"1.5 hours"],[120,"2 hours"],[180,"3 hours"]].map(([v,l])=>`<option value="${v}" ${+w.len===v?"selected":""}>${l}</option>`).join("")}</select></label>
+      <label>Best time<select data-want="${w.id}" data-k="tod">${[["any","Any time"],["morning","Morning"],["afternoon","Afternoon"],["evening","Evening"]].map(([v,l])=>`<option value="${v}" ${w.tod===v?"selected":""}>${l}</option>`).join("")}</select></label></div>
+      ${dayChips(w.days,"wantday",w.id)}</div>`).join(""):`<p class="note">Add a few things you want more time for.</p>`}</div>
+    <div class="crow2"><label>Space between flexible blocks<select data-f="buffer">${[10,15,20,30].map(v=>`<option value="${v}" ${+W.buffer===v?"selected":""}>${v} minutes</option>`).join("")}</select></label><span class="note">Flexible blocks are never placed on top of anything, and always keep at least this much space around other blocks.</span></div>
+    ${capacityHtml(true)}`;
+  }else{
+    const {placed,misses}=placeWants(),fx=coachFixed(),ex=existingByDay(),warns=fixedWarnings();
+    const all=ALLDAYS.map(d=>[...ex[d],...fx.filter(x=>x.day===d),...placed.filter(x=>x.day===d)].sort((a,b)=>a.s-b.s));
+    const nNew=fx.length+placed.length;
+    h=`${S.blocks.length?`<div class="radio"><button type="button" data-mode="add" aria-pressed="${W.mode==="add"}"><b>Add to my schedule</b><span>Keeps your current blocks. Flexible time is fitted around them.</span></button>
+      <button type="button" data-mode="replace" aria-pressed="${W.mode==="replace"}"><b>Replace my schedule</b><span>Starts fresh with this week.</span></button></div>
+      ${W.mode==="replace"?`<label class="chk"><input type="checkbox" data-f="archive" ${W.archive?"checked":""}> Save my current schedule with today's date (restore it anytime in Settings)</label>${W.archive?"":`<div class="warns"><div>Your current ${S.blocks.length} blocks will be deleted.</div></div>`}`:""}`:""}
+    <p><b>${nNew}</b> blocks will be added: ${fx.length} fixed (solid) and ${placed.length} flexible (dashed).${W.mode==="add"&&S.blocks.length?" Faded blocks are already on your schedule.":""}</p>
+    ${misses.length?`<div class="warns">${misses.map(x=>`<div>${esc(x.w.title||"Goal")}: placed ${x.got} of ${x.need} sessions. Try shorter sessions, more days, or "Any time".</div>`).join("")}</div>`:""}
+    ${warns.length?`<div class="warns">${warns.map(w=>`<div>${esc(w)}</div>`).join("")}</div>`:""}
+    <div class="pweek">${dayOrderM().map(d=>`<div class="pday"><h5>${dname(d)}</h5>${all[d].map(x=>`<div class="pb${x.flex?" flex":""}${x.old?" old":""}" style="--c:var(--p-${colorOf((S.cats.find(c=>c.id===x.cat)||{color:(CAT_DEFAULTS[x.cat]||[0,"gray"])[1]}).color)});--c-bg:var(--p-${colorOf((S.cats.find(c=>c.id===x.cat)||{color:(CAT_DEFAULTS[x.cat]||[0,"gray"])[1]}).color)}-bg)"><em>${clock(x.s)}–${clock(x.e)}</em>${esc(x.title)}</div>`).join("")||`<span class="note">Free</span>`}</div>`).join("")}</div>
+    ${placed.length?`<label class="chk"><input type="checkbox" data-f="trackWants" ${W.trackWants?"checked":""}> Turn on check-ins for my wants, so I can see if I actually follow through</label>`:""}`;
+  }
+  b.innerHTML=h;
+}
+function setPath(path,val){const ks=path.split(".");let o=W;while(ks.length>1)o=o[ks.shift()];o[ks[0]]=val}
+$("coachBody").addEventListener("input",e=>{
+  const t=e.target;
+  if(t.dataset.f&&t.type!=="checkbox"){setPath(t.dataset.f,t.value);if(t.dataset.f==="wake"||t.dataset.f==="bed"){const sl=$("coachBody").querySelector('input[type=text][disabled]');if(sl)sl.value=hrs(1440-(bedM()-wakeM()))}}
+  if(t.dataset.must){const r=W.musts.find(x=>x.id===t.dataset.must);if(r)r[t.dataset.k]=t.value}
+  if(t.dataset.want){const w=W.wants.find(x=>x.id===t.dataset.want);if(w)w[t.dataset.k]=t.dataset.k==="hours"?t.value:t.value}
+  if(t.dataset.meal&&t.type!=="checkbox"){W.meals[t.dataset.meal][t.dataset.k]=t.value}
+  const cap=$("coachBody").querySelector(".capacity");if(cap&&t.type!=="text"||cap&&t.dataset.k!=="title"){if(cap)cap.outerHTML=capacityHtml(W.step===5)}
+});
+$("coachBody").addEventListener("change",e=>{
+  const t=e.target;
+  if(t.type==="checkbox"){if(t.dataset.f)setPath(t.dataset.f,t.checked);if(t.dataset.meal)W.meals[t.dataset.meal].on=t.checked;renderCoach();return}
+  if(t.tagName==="SELECT"||t.type==="time")renderCoach();
+});
+$("coachBody").addEventListener("click",e=>{
+  const b=e.target.closest("button");if(!b)return;const d=b.dataset;
+  if(d.persona){applyPersona(d.persona);renderCoach();return}
+  if(d.addmust){W.musts.push({id:cid(),type:d.addmust,title:MUST_TYPES[d.addmust][0],days:[...WEEKDAYS],start:"09:00",end:"10:00"});renderCoach();return}
+  if(d.rmmust){W.musts=W.musts.filter(x=>x.id!==d.rmmust);renderCoach();return}
+  if(d.addwant){W.wants.push({id:cid(),type:d.addwant,title:WANT_TYPES[d.addwant][0],hours:2,len:60,tod:"any",days:[...ALLDAYS]});renderCoach();return}
+  if(d.rmwant){W.wants=W.wants.filter(x=>x.id!==d.rmwant);renderCoach();return}
+  if(d.mv){const i=W.wants.findIndex(x=>x.id===d.mv),j=i+ +d.dir;if(j>=0&&j<W.wants.length){[W.wants[i],W.wants[j]]=[W.wants[j],W.wants[i]];renderCoach()}return}
+  if(d.role==="mustday"||d.role==="wantday"){const r=(d.role==="mustday"?W.musts:W.wants).find(x=>x.id===d.id);const day=+d.day;if(!r)return;
+    r.days=r.days.includes(day)?r.days.filter(x=>x!==day):[...r.days,day];if(!r.days.length)r.days=[day];renderCoach();return}
+  if(d.mode){W.mode=d.mode;renderCoach();return}
+});
+function ensureCat(id){if(S.cats.some(c=>c.id===id))return id;const dflt=CAT_DEFAULTS[id]||[id,"gray"];S.cats.push({id,name:dflt[0],color:dflt[1],track:true});return id}
+function commitCoach(){
+  const {placed}=placeWants(),fx=coachFixed();
+  if(W.mode==="replace"){if(W.archive)archiveCurrent();S.blocks=[]}
+  const mk=x=>({id:newId(),kind:"weekly",day:x.day,start:hhmm(x.s),end:hhmm(x.e%1440),title:x.title,cat:ensureCat(x.cat),skip:[],flex:!!x.flex});
+  fx.forEach(x=>S.blocks.push(mk(x)));placed.forEach(x=>S.blocks.push(mk(x)));
+  if(W.trackWants)placed.forEach(x=>{const c=S.cats.find(c=>c.id===x.cat);if(c)c.track=true});
+  S.buffer=Math.max(10,+W.buffer||15);
+  const ws=Math.floor(wakeM()/60),we=Math.ceil(bedM()/60);
+  if(W.mode==="replace"){S.dayStart=Math.max(0,Math.min(12,ws));S.dayEnd=Math.max(S.dayStart+4,Math.min(24,we))}
+  else{S.dayStart=Math.min(S.dayStart,Math.max(0,Math.min(12,ws)));S.dayEnd=Math.max(S.dayEnd,Math.min(24,we))}
+  const n=fx.length+placed.length;$("coachShade").hidden=true;W=null;cursor=parseD(TODAY);persist();setView("week");toast(`Added ${n} blocks to your week`);
+}
+$("coachNext").onclick=()=>{
+  if(W.step===1&&!W.persona){applyPersona("scratch")}
+  if(W.step<STEPS.length-1){W.step++;renderCoach();$("coachBody").scrollTop=0;$("coachShade").querySelector(".sheet").scrollTop=0;return}
+  commitCoach();
+};
+$("coachBack").onclick=()=>{if(W.step>0){W.step--;renderCoach()}};
+$("coachQuit").onclick=e=>armed(e.target,"Exit coach","Tap again to exit",()=>{$("coachShade").hidden=true;W=null});
+$("coachBtn").onclick=openCoach;
+
 /* ============ welcome ============ */
 $("stripes").innerHTML=PALETTE.slice(0,8).map(c=>`<i style="--sw:var(--p-${c})"></i>`).join("");
 function startWith(example){
@@ -1287,6 +1622,7 @@ function startWith(example){
   cursor=parseD(TODAY);persist();boot();$("wInvite").hidden=true;runPending();
 }
 $("wBlank").onclick=()=>startWith(false);$("wExample").onclick=()=>startWith(true);
+$("wCoach").onclick=()=>{startWith(false);setTimeout(openCoach,60)};
 
 /* ============ boot ============ */
 document.addEventListener("keydown",e=>{if(e.key!=="Escape")return;
