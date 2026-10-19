@@ -841,7 +841,8 @@ function normalize(d){
     const base={id:String(r.id||newId()),start:r.start,end:r.end,title:String(r.title||"Untitled").slice(0,60),cat:String(r.cat||cats[0].id),flex:!!r.flex};
     if(r.kind==="once")return isISO(r.date)?{...base,kind:"once",date:r.date}:null;
     if(!(Number.isInteger(+r.day)&&+r.day>=0&&+r.day<7))return null;
-    return {...base,kind:"weekly",day:+r.day,skip:Array.isArray(r.skip)?r.skip.filter(isISO):[]};
+    const wk={...base,kind:"weekly",day:+r.day,skip:Array.isArray(r.skip)?r.skip.filter(isISO):[]};if(isISO(r.from))wk.from=r.from;if(isISO(r.until))wk.until=r.until;
+    return wk.from&&wk.until&&wk.until<wk.from?null:wk;
   }).filter(Boolean);
   const metrics=(Array.isArray(d.metrics)?d.metrics:[]).filter(x=>x&&x.name).map(x=>({id:String(x.id||newId("m")),name:String(x.name).slice(0,30),cats:Array.isArray(x.cats)?x.cats.map(String):[],target:Math.max(0,+x.target||0),stretch:Math.max(0,+x.stretch||0),fromTeam:!!x.fromTeam}));
   const checkins={};if(d.checkins&&typeof d.checkins==="object")for(const[k,v]of Object.entries(d.checkins)){if(/\|\d{4}-\d{2}-\d{2}$/.test(k)&&v&&typeof v==="object"){const mm={};if(v.m)for(const[a,b]of Object.entries(v.m))if(isFinite(+b))mm[a]=+b;checkins[k]={t:String(v.t||""),late:!!v.late,m:mm,note:String(v.note||"").slice(0,140)}}}
@@ -871,9 +872,17 @@ const cvC=c=>{const k=colorOf(c.color);return `--c:var(--p-${k});--c-bg:var(--p-
 const cv=(sch,id)=>cvC(catOf(sch,id));
 function occ(sch,date){
   const k=iso(date),wd=mon0(date);
-  return sch.blocks.filter(b=>b.kind==="once"?b.date===k:(b.day===wd&&!b.skip.includes(k)))
+  return sch.blocks.filter(b=>b.kind==="once"?b.date===k:(b.day===wd&&!b.skip.includes(k)&&(!b.from||k>=b.from)&&(!b.until||k<=b.until)))
     .map(b=>({b,key:b.id+"@"+k,date:k,s:m(b.start),e:endM(b.end),title:b.title,cat:b.cat}));
 }
+/* history: edits/deletes of weekly blocks apply from a cut date forward; the old block keeps its past (until = day before cut) */
+const live=b=>b.kind==="once"?b.date>=TODAY:(!b.until||b.until>=TODAY);
+const liveBlocks=()=>S.blocks.filter(live);
+function cutFor(b){if(b.kind!=="weekly"||b.day!==mon0(parseD(TODAY)))return TODAY;
+  return (nowMin>=endM(b.end)||S.checkins[b.id+"|"+TODAY])?iso(addDays(parseD(TODAY),1)):TODAY}
+function endBlock(b,cut){if(b.kind==="once"){if(b.date>=cut&&!S.checkins[b.id+"|"+b.date])S.blocks=S.blocks.filter(x=>x!==b);return false}
+  if(b.from&&b.from>=cut){S.blocks=S.blocks.filter(x=>x!==b);return false}
+  b.until=iso(addDays(parseD(cut),-1));if(b.from&&b.until<b.from)S.blocks=S.blocks.filter(x=>x!==b);return true}
 const atMin=(dateIso,min)=>{const d=parseD(dateIso);d.setMinutes(min);return d};
 function status(sch,o,when){
   const c=catOf(sch,o.cat);if(!c.track||o.date<sch.startDate)return null;
@@ -1243,6 +1252,7 @@ function syncEditor(){
   [...$("fType").children].forEach(b=>b.setAttribute("aria-pressed",(b.dataset.t==="flex")===ed.flex));
   $("fDaysLabel").textContent=ed.o?"Days (select more to copy it)":"Days";
 }
+let histNote=false;
 function openEditor(o,preset){
   const date=o?o.date:(preset?.date||iso(cursor));const d=parseD(date);
   ed={o:o||null,repeat:o?o.b.kind:lastRepeat,days:new Set([o&&o.b.kind==="weekly"?o.b.day:mon0(d)]),cat:o?o.cat:(S.cats.some(c=>c.id===lastCat)?lastCat:S.cats[0]?.id),scope:"all",date,flex:o?!!o.b.flex:false};
@@ -1251,7 +1261,7 @@ function openEditor(o,preset){
   const s=o?o.s:(preset?.s??540),e=o?o.e:Math.min(1440,preset?.e??s+60);
   $("fStart").value=hhmm(s);$("fEnd").value=hhmm(e%1440);$("fDate").value=o&&o.b.kind==="once"?o.b.date:date;
   $("fDays").innerHTML=dayPickOrder().map(g=>`<button type="button" data-i="${(g+6)%7}">${WD[g]}</button>`).join("");
-  $("fScope").innerHTML=`<button type="button" data-s="all">All weeks</button><button type="button" data-s="one">Only ${esc(dShort(d))}</button>`;
+  $("fScope").innerHTML=`<button type="button" data-s="all">Every week from today</button><button type="button" data-s="one">Only ${esc(dShort(d))}</button>`;
   renderCatPicks();
   $("fErr").textContent="";$("fDel").hidden=!o;$("fDel").textContent="Delete";$("fDel").dataset.armed="";
   syncEditor();$("shade").hidden=false;setTimeout(()=>$("fTitle").focus(),30);
@@ -1278,19 +1288,22 @@ $("form").addEventListener("submit",e=>{
   if(o&&o.b.kind==="weekly"&&ed.scope==="one"){
     o.b.skip.push(o.date);S.blocks.push({id:newId(),kind:"once",date:o.date,...base});
   }else{
-    if(o)S.blocks=S.blocks.filter(b=>b.id!==o.b.id);
-    if(ed.repeat==="once"){S.blocks.push({id:o?o.b.id:newId(),kind:"once",date:$("fDate").value,...base})}
+    let kept=false,from=iso(weekStartOf(parseD(ed.date)));
+    if(o&&o.b.kind==="weekly"){const cut=cutFor(o.b);from=o.b.from&&o.b.from>cut?o.b.from:cut;kept=endBlock(o.b,cut);if(kept)histNote=true}
+    else if(o)S.blocks=S.blocks.filter(b=>b.id!==o.b.id);
+    const reuse=o&&!kept;
+    if(ed.repeat==="once"){S.blocks.push({id:reuse?o.b.id:newId(),kind:"once",date:$("fDate").value,...base})}
     else{const days=[...ed.days];const keep=o&&o.b.kind==="weekly"&&days.includes(o.b.day)?o.b.day:days[0];
-      days.forEach(dd=>S.blocks.push({id:(o&&dd===keep)?o.b.id:newId(),kind:"weekly",day:dd,skip:(o&&dd===keep&&o.b.kind==="weekly")?o.b.skip:[],...base}))}
+      days.forEach(dd=>S.blocks.push({id:(reuse&&dd===keep)?o.b.id:newId(),kind:"weekly",day:dd,skip:(reuse&&dd===keep&&o.b.kind==="weekly")?o.b.skip.filter(x=>x>=from):[],from,...base}))}
   }
-  closeEditor();commit();toast("Saved");
+  closeEditor();commit();toast(histNote?"Saved from today on · past weeks unchanged":"Saved");histNote=false;
 });
 $("fDel").onclick=()=>{
   const btn=$("fDel");const o=ed.o;
   const one=o.b.kind==="weekly"&&ed.scope==="one";
-  if(!btn.dataset.armed){btn.dataset.armed="1";btn.textContent=one?"Tap again: skip this day":o.b.kind==="weekly"?"Tap again: delete every week":"Tap again to delete";setTimeout(()=>{btn.dataset.armed="";btn.textContent="Delete"},3500);return}
-  if(one)o.b.skip.push(o.date);else S.blocks=S.blocks.filter(b=>b.id!==o.b.id);
-  closeEditor();commit();toast(one?"Removed for this day":"Deleted");
+  if(!btn.dataset.armed){btn.dataset.armed="1";btn.textContent=one?"Tap again: skip this day":o.b.kind==="weekly"?"Tap again: remove from today on":"Tap again to delete";setTimeout(()=>{btn.dataset.armed="";btn.textContent="Delete"},3500);return}
+  let kept=false;if(one)o.b.skip.push(o.date);else if(o.b.kind==="weekly")kept=endBlock(o.b,cutFor(o.b));else S.blocks=S.blocks.filter(b=>b.id!==o.b.id);
+  closeEditor();commit();toast(one?"Removed for this day":kept?"Removed from today on · past weeks keep it":"Deleted");
 };
 $("addBtn").onclick=()=>openEditor(null,{date:view==="day"?iso(cursor):(weekDates(cursor).some(d=>iso(d)===TODAY)?TODAY:iso(weekDates(cursor)[0]))});
 
@@ -1333,7 +1346,7 @@ function renderTeam(){renderDashboard()}
 /* ============ settings ============ */
 const hourLabel=h=>h===24?"12 AM (midnight)":fmt(h*60);
 function renderCats(){
-  const used={};S.blocks.forEach(b=>used[b.cat]=(used[b.cat]||0)+1);
+  const used={};liveBlocks().forEach(b=>used[b.cat]=(used[b.cat]||0)+1);
   $("catList").innerHTML=S.cats.map(c=>`<div class="crow" data-id="${esc(c.id)}" style="${cvC(c)}"><div class="top"><input class="row-in" value="${esc(c.name)}" maxlength="30" aria-label="Category name" data-role="name"><button type="button" class="btn small danger" data-role="del">${used[c.id]?"Delete ("+used[c.id]+")":"Delete"}</button></div>
     <div class="swatches">${PALETTE.map(p=>`<button type="button" data-role="color" data-c="${p}" aria-label="${p}" aria-pressed="${c.color===p}" style="--sw:var(--p-${p})"></button>`).join("")}<button type="button" class="tgl" data-role="track" aria-pressed="${c.track}">Check-ins ${c.track?"on":"off"}</button></div></div>`).join("");
 }
@@ -1372,7 +1385,7 @@ $("catList").addEventListener("click",e=>{
   if(btn.dataset.role==="track"){c.track=!c.track;renderCats();return}
   if(btn.dataset.role==="del"){
     if(S.cats.length===1){toast("Keep at least one category");return}
-    const n=S.blocks.filter(b=>b.cat===c.id).length;
+    const n=liveBlocks().filter(b=>b.cat===c.id).length;
     if(n&&!btn.dataset.armed){btn.dataset.armed="1";btn.textContent=`Also deletes ${n} block${n>1?"s":""}. Tap again`;setTimeout(()=>{if(btn.isConnected){btn.dataset.armed="";btn.textContent=`Delete (${n})`}},4000);return}
     S.blocks=S.blocks.filter(b=>b.cat!==c.id);S.cats=S.cats.filter(x=>x.id!==c.id);S.metrics.forEach(mt=>mt.cats=mt.cats.filter(x=>x!==c.id));renderCats();renderMetrics();
   }
@@ -1722,8 +1735,8 @@ $("mpShade").addEventListener("click",e=>{if(e.target===$("mpShade"))$("mpShade"
 
 /* ============ saved schedules (archives) ============ */
 function archiveCurrent(label){
-  if(!S.blocks.length)return;
-  S.archives=[...(S.archives||[]),{id:newId("a"),name:label||`Schedule saved ${dShort(new Date())}, ${new Date().getFullYear()}`,date:iso(new Date()),blocks:JSON.parse(JSON.stringify(S.blocks)),cats:JSON.parse(JSON.stringify(S.cats))}].slice(-12);
+  const lb=liveBlocks();if(!lb.length)return;
+  S.archives=[...(S.archives||[]),{id:newId("a"),name:label||`Schedule saved ${dShort(new Date())}, ${new Date().getFullYear()}`,date:iso(new Date()),blocks:JSON.parse(JSON.stringify(lb)).map(({from,until,...r})=>r),cats:JSON.parse(JSON.stringify(S.cats))}].slice(-12);
 }
 function renderArchives(){
   const a=S.archives||[];$("archWrap").hidden=!a.length;
@@ -1735,7 +1748,8 @@ $("archList").addEventListener("click",e=>{
   armed(b,"Restore","Tap again to restore",()=>{
     archiveCurrent(`Before restore · ${dShort(new Date())}`);
     a.cats.forEach(c=>{if(c&&c.id&&!S.cats.some(x=>x.id===c.id))S.cats.push({id:String(c.id),name:String(c.name||"Category"),color:colorOf(c.color),track:c.track!==false})});
-    S.blocks=JSON.parse(JSON.stringify(a.blocks)).map(r=>({...r,id:newId()}));S.blocks=normalize({...S,blocks:S.blocks}).blocks;
+    [...S.blocks].forEach(b=>{if(live(b))endBlock(b,cutFor(b))});
+    const add=normalize({...S,blocks:JSON.parse(JSON.stringify(a.blocks)).map(({from,until,...r})=>({...r,id:newId(),...(r.kind==="weekly"?{from:TODAY}:{})}))}).blocks;S.blocks.push(...add);
     S.archives=S.archives.filter(x=>x.id!==id);persist();renderArchives();renderCats();toast("Schedule restored")});
 });
 
@@ -1787,7 +1801,7 @@ function coachFixed(){
 }
 function existingByDay(){ // existing weekly blocks kept when adding
   const by=ALLDAYS.map(()=>[]);if(W.mode!=="add")return by;
-  S.blocks.filter(b=>b.kind==="weekly").forEach(b=>by[b.day].push({s:m(b.start),e:endM(b.end),title:b.title,cat:b.cat,old:true,flex:b.flex}));return by;
+  liveBlocks().filter(b=>b.kind==="weekly").forEach(b=>by[b.day].push({s:m(b.start),e:endM(b.end),title:b.title,cat:b.cat,old:true,flex:b.flex}));return by;
 }
 function union(iv){const a=iv.map(x=>[x.s,x.e]).sort((p,q)=>p[0]-q[0]);const r=[];a.forEach(([s0,e0])=>{if(r.length&&s0<=r[r.length-1][1])r[r.length-1][1]=Math.max(r[r.length-1][1],e0);else r.push([s0,e0])});return r}
 function freeMinutes(){
@@ -1884,10 +1898,10 @@ function renderCoach(){
     const {placed,misses}=placeWants(),fx=coachFixed(),ex=existingByDay(),warns=fixedWarnings();
     const all=ALLDAYS.map(d=>[...ex[d],...fx.filter(x=>x.day===d),...placed.filter(x=>x.day===d)].sort((a,b)=>a.s-b.s));
     const nNew=fx.length+placed.length;
-    h=`${S.blocks.length?`<div class="radio"><button type="button" data-mode="add" aria-pressed="${W.mode==="add"}"><b>Add to my schedule</b><span>Keeps your current blocks. Flexible time is fitted around them.</span></button>
+    h=`${liveBlocks().length?`<div class="radio"><button type="button" data-mode="add" aria-pressed="${W.mode==="add"}"><b>Add to my schedule</b><span>Keeps your current blocks. Flexible time is fitted around them.</span></button>
       <button type="button" data-mode="replace" aria-pressed="${W.mode==="replace"}"><b>Replace my schedule</b><span>Starts fresh with this week.</span></button></div>
-      ${W.mode==="replace"?`<label class="chk"><input type="checkbox" data-f="archive" ${W.archive?"checked":""}> Save my current schedule with today's date (restore it anytime in Settings)</label>${W.archive?"":`<div class="warns"><div>Your current ${S.blocks.length} blocks will be deleted.</div></div>`}`:""}`:""}
-    <p><b>${nNew}</b> blocks will be added: ${fx.length} fixed (solid) and ${placed.length} flexible (dashed).${W.mode==="add"&&S.blocks.length?" Faded blocks are already on your schedule.":""}</p>
+      ${W.mode==="replace"?`<label class="chk"><input type="checkbox" data-f="archive" ${W.archive?"checked":""}> Save my current schedule with today's date (restore it anytime in Settings)</label>${W.archive?"":`<div class="warns"><div>Your current ${liveBlocks().length} blocks will end today. Past weeks keep them.</div></div>`}`:""}`:""}
+    <p><b>${nNew}</b> blocks will be added: ${fx.length} fixed (solid) and ${placed.length} flexible (dashed).${W.mode==="add"&&liveBlocks().length?" Faded blocks are already on your schedule.":""}</p>
     ${misses.length?`<div class="warns">${misses.map(x=>`<div>${esc(x.w.title||"Goal")}: placed ${x.got} of ${x.need} sessions. Try shorter sessions, more days, or "Any time".</div>`).join("")}</div>`:""}
     ${warns.length?`<div class="warns">${warns.map(w=>`<div>${esc(w)}</div>`).join("")}</div>`:""}
     <div class="pweek">${dayOrderM().map(d=>`<div class="pday"><h5>${dname(d)}</h5>${all[d].map(x=>`<div class="pb${x.flex?" flex":""}${x.old?" old":""}" style="--c:var(--p-${colorOf((S.cats.find(c=>c.id===x.cat)||{color:(CAT_DEFAULTS[x.cat]||[0,"gray"])[1]}).color)});--c-bg:var(--p-${colorOf((S.cats.find(c=>c.id===x.cat)||{color:(CAT_DEFAULTS[x.cat]||[0,"gray"])[1]}).color)}-bg)"><em>${clock(x.s)}–${clock(x.e)}</em>${esc(x.title)}</div>`).join("")||`<span class="note">Free</span>`}</div>`).join("")}</div>
@@ -1924,8 +1938,9 @@ $("coachBody").addEventListener("click",e=>{
 function ensureCat(id){if(S.cats.some(c=>c.id===id))return id;const dflt=CAT_DEFAULTS[id]||[id,"gray"];S.cats.push({id,name:dflt[0],color:dflt[1],track:true});return id}
 function commitCoach(){
   const {placed}=placeWants(),fx=coachFixed();
-  if(W.mode==="replace"){if(W.archive)archiveCurrent();S.blocks=[]}
-  const mk=x=>({id:newId(),kind:"weekly",day:x.day,start:hhmm(x.s),end:hhmm(x.e%1440),title:x.title,cat:ensureCat(x.cat),skip:[],flex:!!x.flex});
+  if(W.mode==="replace"){if(W.archive)archiveCurrent();[...S.blocks].forEach(b=>{if(live(b))endBlock(b,cutFor(b))})}
+  const cfrom=W.mode==="replace"?TODAY:iso(weekStartOf(parseD(TODAY)));
+  const mk=x=>({id:newId(),kind:"weekly",from:cfrom,day:x.day,start:hhmm(x.s),end:hhmm(x.e%1440),title:x.title,cat:ensureCat(x.cat),skip:[],flex:!!x.flex});
   fx.forEach(x=>S.blocks.push(mk(x)));placed.forEach(x=>S.blocks.push(mk(x)));
   if(W.trackWants)placed.forEach(x=>{const c=S.cats.find(c=>c.id===x.cat);if(c)c.track=true});
   S.buffer=Math.max(10,+W.buffer||15);
