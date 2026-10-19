@@ -91,6 +91,7 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .catrow .bar em{position:absolute;left:0;top:0;bottom:0;background:var(--c);border-radius:3px}
 .catrow .sub{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;font-family:var(--body);font-size:12px;letter-spacing:0;margin-top:0;color:var(--muted);white-space:nowrap}
 .delta.up{color:var(--ok)}.delta.dn{color:var(--danger)}
+.summeta .miss b{color:var(--danger)}
 .cirow{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--muted)}
 .cirow b{font-family:var(--mono);color:var(--fg)}
 @media (max-width:640px){.legend{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}.legend::-webkit-scrollbar{display:none}.legend .chip{flex:none}}
@@ -934,8 +935,15 @@ function rangeDates(){if(view==="day")return [cursor];if(view==="week")return we
 const PER={day:"Day",week:"Week",month:"Month"};
 function prevRange(){if(view==="day")return [addDays(cursor,-1)];if(view==="week")return weekDates(addDays(cursor,-7));
   const f=new Date(cursor.getFullYear(),cursor.getMonth()-1,1),n=new Date(cursor.getFullYear(),cursor.getMonth(),0).getDate();return [...Array(n)].map((_,i)=>addDays(f,i))}
-function catTotals(sch,dates){const t={},el={};dates.forEach(d=>{const k=iso(d);occ(sch,d).forEach(o=>{const m=o.e-o.s;t[o.cat]=(t[o.cat]||0)+m;
-  el[o.cat]=(el[o.cat]||0)+(k<TODAY?m:k>TODAY?0:Math.min(m,Math.max(0,nowMin-o.s)))})});return {t,el}}
+/* done time: categories with check-ins off run on the clock; tracked blocks count only from the moment you checked in.
+   missed: tracked blocks that have ended, minus the part credited */
+function ciMinute(ci,date){const d=new Date(ci.t);if(isNaN(d))return -1;const k=iso(d);return k<date?-1:k>date?1e6:d.getHours()*60+d.getMinutes()}
+function blockDone(sch,o){const k=o.date,now=k<TODAY?1e6:k>TODAY?-1:nowMin,passed=Math.max(0,Math.min(o.e,now)-o.s),ended=now>=o.e;
+  if(!status(sch,o,NOW))return {done:passed,missed:0};
+  const ci=sch.checkins[o.b.id+"|"+k];if(!ci)return {done:0,missed:ended?o.e-o.s:0};
+  const from=Math.max(o.s,ciMinute(ci,k)),done=Math.max(0,Math.min(o.e,now)-from);return {done,missed:Math.max(0,Math.min(from,o.e,Math.max(o.s,now))-o.s)}}
+function catTotals(sch,dates){const t={},el={},ms={};dates.forEach(d=>{occ(sch,d).forEach(o=>{const m=o.e-o.s;t[o.cat]=(t[o.cat]||0)+m;
+  const r=blockDone(sch,o);el[o.cat]=(el[o.cat]||0)+r.done;ms[o.cat]=(ms[o.cat]||0)+r.missed})});return {t,el,ms}}
 function periodName(dates){const a=dates[0],z=dates[dates.length-1];if(view==="day")return dLong(a);if(view==="month")return MONL[a.getMonth()]+" "+a.getFullYear();
   return `${MON[a.getMonth()]} ${a.getDate()} – ${a.getMonth()===z.getMonth()?"":MON[z.getMonth()]+" "}${z.getDate()}`}
 function renderLegend(){
@@ -946,8 +954,8 @@ function renderLegend(){
   if(open)renderSum();
 }
 function renderSum(){
-  const sch=src(),dates=rangeDates(),{t,el}=catTotals(sch,dates),pv=catTotals(sch,prevRange()).t;
-  const total=Object.values(t).reduce((x,y)=>x+y,0),done=Object.values(el).reduce((x,y)=>x+y,0);
+  const sch=src(),dates=rangeDates(),{t,el,ms}=catTotals(sch,dates),pv=catTotals(sch,prevRange()).t;
+  const total=Object.values(t).reduce((x,y)=>x+y,0),done=Object.values(el).reduce((x,y)=>x+y,0),missed=Object.values(ms).reduce((x,y)=>x+y,0);
   const isos=dates.map(iso),current=isos[0]<=TODAY&&TODAY<=isos[isos.length-1],past=isos[isos.length-1]<TODAY;
   const nBlocks=dates.reduce((n,d)=>n+occ(sch,d).length,0);let openMin=0;dates.forEach(d=>{const l=occ(sch,d);const dS=Math.min(sch.dayStart*60,...l.map(o=>o.s)),dE=Math.max(sch.dayEnd*60,...l.map(o=>o.e));freeSlots([l],dS,dE).forEach(([a,b])=>openMin+=b-a)});
   const used=sch.cats.filter(c=>t[c.id]||pv[c.id]).sort((a,b)=>(t[b.id]||0)-(t[a.id]||0));
@@ -955,13 +963,13 @@ function renderSum(){
   const delta=(a,b)=>{const d=a-b;if(!b&&!a)return "";if(!b)return `<span class="delta up">new vs ${last}</span>`;if(!d)return `<span class="delta">same as ${last}</span>`;return `<span class="delta ${d>0?"up":"dn"}">${d>0?"+":"−"}${dur(Math.abs(d))} vs ${last}</span>`};
   const rows=used.map(c=>{const m=t[c.id]||0,e=el[c.id]||0;
     return `<div class="catrow" style="${cvC(c)}"><div class="nm"><i></i><span>${esc(c.name)}</span></div><div class="hr">${m?dur(m):"0m"}</div>
-      <div class="bar"><span style="width:${total?(m/total*100).toFixed(1):0}%"></span>${current?`<em style="width:${total?(e/total*100).toFixed(1):0}%"></em>`:""}</div>
-      <div class="sub"><span>${total?Math.round(m/total*100):0}% of total${current&&m?` · ${dur(e)} done`:""}</span>${delta(m,pv[c.id]||0)}</div></div>`}).join("");
+      <div class="bar"><span style="width:${total?(m/total*100).toFixed(1):0}%"></span>${current||past?`<em style="width:${total?(e/total*100).toFixed(1):0}%"></em>`:""}</div>
+      <div class="sub"><span>${total?Math.round(m/total*100):0}% of total${(current||past)&&m?` · ${dur(e)} done${ms[c.id]?` · ${dur(ms[c.id])} missed`:""}`:""}</span>${delta(m,pv[c.id]||0)}</div></div>`}).join("");
   const st=weekStats(sch,dates,asOf());
   const ci=st.rate===null?"":`<div><h4>Check-ins</h4><div class="cirow" style="margin-top:6px"><span><b>${st.rate}%</b> checked in</span><span><b>${st.done}</b> on time</span><span><b>${st.late}</b> late</span><span><b>${st.missed}</b> missed</span></div></div>`;
   const ptot=Object.values(pv).reduce((x,y)=>x+y,0);
   $("sumPanel").innerHTML=`<div class="sumtop"><div><h4>${PER[view]} total</h4><div class="big">${dur(total)}</div></div><div class="per">${esc(periodName(dates))}<br>${delta(total,ptot)}</div></div>
-    <div class="summeta"><div><b>${nBlocks}</b>block${nBlocks===1?"":"s"} scheduled</div><div><b>${dur(openMin)}</b>open in your day hours</div>${current?`<div><b>${dur(done)}</b>done so far</div><div><b>${dur(Math.max(0,total-done))}</b>still ahead</div>`:past?`<div><b>${dur(total)}</b>done</div><div><b>0m</b>still ahead</div>`:""}</div>
+    <div class="summeta"><div><b>${nBlocks}</b>block${nBlocks===1?"":"s"} scheduled</div><div><b>${dur(openMin)}</b>open in your day hours</div>${current||past?`<div><b>${dur(done)}</b>done${current?" so far":""}</div><div class="${missed?"miss":""}"><b>${dur(missed)}</b>missed · not checked in</div>${current?`<div style="grid-column:1/-1"><b>${dur(Math.max(0,total-done-missed))}</b>still ahead</div>`:""}`:""}</div>
     <div><h4>By category</h4></div>${rows||`<p class="note">No blocks in this ${view}.</p>`}${ci}`;
 }
 function placeSum(){const b=$("sumBtn");if(!b)return;const r=b.getBoundingClientRect(),p=$("sumPanel"),w=p.offsetWidth;
