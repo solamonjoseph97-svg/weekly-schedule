@@ -296,6 +296,22 @@ button:disabled,button[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
 .btn.busy{pointer-events:none;opacity:.7}
 .btn.busy::after{content:"";display:inline-block;width:10px;height:10px;margin-left:8px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* iOS-style action sheet */
+.shade.bottom{align-items:flex-end;padding-bottom:max(10px,env(safe-area-inset-bottom,0px))}
+.asheet{width:100%;max-width:520px;display:flex;flex-direction:column;gap:8px;animation:sheetUp .28s cubic-bezier(.2,.7,.2,1)}
+@keyframes sheetUp{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
+.asheet .panel{background:var(--surface);border-radius:16px;padding:16px 16px 18px;display:flex;flex-direction:column;gap:14px}
+.asheet .grab{width:38px;height:5px;border-radius:3px;background:var(--line-strong);align-self:center;margin-top:-6px}
+.asheet h3{margin:0;text-align:center;font:700 15px var(--body);text-transform:none}
+.asheet .sub2{text-align:center;font-size:12.5px;color:var(--muted);margin:-10px 0 0}
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.tile{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 8px;border-radius:14px;border:0;background:var(--bg);color:var(--fg);cursor:pointer;font:600 13.5px var(--body)}
+.tile .ico{width:58px;height:58px;border-radius:16px;display:flex;align-items:center;justify-content:center;color:#fff}
+.tile .ico.msg{background:linear-gradient(180deg,#5cf777,#0ebe2e)}
+.tile .ico.file{background:linear-gradient(180deg,#5ab0ff,#1d6ff2)}
+.tile small{font-weight:500;font-size:11.5px;color:var(--muted);text-align:center;line-height:1.3}
+.asheet .cancel{background:var(--surface);border:0;border-radius:14px;padding:15px;font:700 16px var(--body);color:var(--accent);cursor:pointer}
 /* app shell: the chrome stays put, each view scrolls inside its own frame */
 html,body{height:100%}
 body{overflow:hidden;overscroll-behavior:none}
@@ -336,7 +352,7 @@ body{overflow:hidden;overscroll-behavior:none}
       <button type="button" id="wExample"><b>Start from an example</b><span>A sample work week you can edit or clear.</span></button>
     </div>
     <button type="button" class="btn primary" id="wCoach" style="align-self:flex-start">New to scheduling? Let the coach walk you through it</button>
-    <div class="actions"><button type="button" class="btn" id="wLoad">Have a packet? Load it</button><button type="button" class="btn" id="wPaste">Receive from text</button></div>
+    <button type="button" class="btn" id="rcvWelcome" style="align-self:flex-start">Got a schedule from someone? Receive it ▾</button>
   </div>
 </div>
 
@@ -377,7 +393,7 @@ body{overflow:hidden;overscroll-behavior:none}
 <aside class="drawer off" id="drawer" aria-label="People" hidden>
   <div class="dhead"><h3>People</h3><button class="btn small" id="drawerClose" type="button">Close</button></div>
   <div class="toggle" role="group" aria-label="People view"><button id="pTabPeople" type="button" aria-pressed="true">Schedules</button><button id="pTabTeam" type="button" aria-pressed="false">Team stats</button></div>
-  <div class="actions"><button class="btn primary" id="dSend" type="button">Send my update</button><button class="btn" id="dRequest" type="button">Request updates</button><button class="btn" id="pastePerson" type="button">Receive from text</button><button class="btn" id="addPerson" type="button">Load a packet file</button></div>
+  <div class="actions"><button class="btn primary" id="dSend" type="button">Send my update</button><button class="btn" id="dRequest" type="button">Request updates</button><button class="btn" id="rcvPeople" type="button">Receive ▾</button></div>
   <div id="pPeople" class="rowlist"></div>
   <div id="pTeam" hidden></div>
   <p class="note">Ask them to open Schedule I.O., tap <b>Settings → Save packet</b>, and send it to you. Load it here to see their schedule and team stats.</p>
@@ -468,8 +484,7 @@ body{overflow:hidden;overscroll-behavior:none}
     <p class="note">Your schedule lives only on this device. Save a packet to your Files, AirDrop or text it to back up, move devices, or share with friends and your team.</p>
     <div class="actions">
       <button type="button" class="btn small" id="exportBtn">Save packet</button>
-      <button type="button" class="btn small" id="importBtn">Load packet</button>
-      <button type="button" class="btn small" id="pasteSettings">Receive from text</button>
+      <button type="button" class="btn small" id="rcvSettings">Receive ▾</button>
     </div>
     <div id="archWrap" class="rowlist">
       <h4>Saved schedules</h4>
@@ -600,6 +615,22 @@ body{overflow:hidden;overscroll-behavior:none}
     <p class="note" style="font-size:14px;color:var(--fg)">iPhone opens links from Messages in Safari, which can't see the Schedule I.O. app on your home screen.</p>
     <ol class="note" style="font-size:14px;color:var(--fg);margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px"><li>Tap <b>Copy link for my app</b></li><li>Open <b>Schedule I.O.</b> from your home screen</li><li>Tap <b>People → Paste link</b></li></ol>
     <div class="stack"><button type="button" class="btn primary" id="hoCopy">Copy link for my app</button><button type="button" class="btn" id="hoHere">I don't have the app, use it here</button></div>
+  </div>
+</div>
+
+<!-- RECEIVE (action sheet) -->
+<div class="shade bottom" id="rcvShade" hidden>
+  <div class="asheet" role="dialog" aria-labelledby="rcvHead">
+    <div class="panel">
+      <div class="grab"></div>
+      <h3 id="rcvHead">Receive a schedule</h3>
+      <p class="sub2">Add someone's schedule, a request, or a team invite.</p>
+      <div class="tiles">
+        <button type="button" class="tile" id="rcvText"><span class="ico msg"><svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C6.5 3 2 6.6 2 11c0 2.4 1.3 4.6 3.4 6.1-.2 1.4-.9 2.7-1.9 3.6 2-.1 3.9-.9 5.3-2.1.9.2 2 .4 3.2.4 5.5 0 10-3.6 10-8s-4.5-8-10-8z"/></svg></span>From a text<small>Copy the link in Messages, then paste</small></button>
+        <button type="button" class="tile" id="rcvFile"><span class="ico file"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm0 1.8L18.2 8H14V3.8z"/></svg></span>From a file<small>A packet saved in Files or AirDropped</small></button>
+      </div>
+    </div>
+    <button type="button" class="cancel" id="rcvCancel">Cancel</button>
   </div>
 </div>
 <input type="file" id="importFile" hidden>
@@ -1050,7 +1081,7 @@ $("peopleBtn").onclick=()=>$("drawer").hidden?openDrawer():closeDrawer();
 $("drawerClose").onclick=closeDrawer;
 $("pTabPeople").onclick=()=>{$("pTabPeople").setAttribute("aria-pressed","true");$("pTabTeam").setAttribute("aria-pressed","false");$("pPeople").hidden=false;$("pTeam").hidden=true};
 $("pTabTeam").onclick=()=>{$("pTabTeam").setAttribute("aria-pressed","true");$("pTabPeople").setAttribute("aria-pressed","false");$("pPeople").hidden=true;$("pTeam").hidden=false;renderTeam()};
-$("addPerson").onclick=()=>$("importFile").click();
+
 const initials=n=>(String(n||"?").trim().split(/\s+/).map(w=>w[0]).join("").slice(0,2)||"?").toUpperCase();
 function renderPeople(){
   const meSt=weekStats(S,weekDates(cursor),NOW);
@@ -1151,8 +1182,8 @@ async function deliverPacket(obj,name){
   setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500);toast("Packet saved to your Downloads");
 }
 $("exportBtn").onclick=()=>deliverPacket({app:"schedule-io",format:2,savedAt:new Date().toISOString(),owner:{id:S.ownerId,name:S.name,phone:S.phone||""},schedule:S},`${safeName(S.name||S.title)} - Schedule IO - ${localDate()}${PKT_EXT}`);
-$("importBtn").onclick=()=>$("importFile").click();
-$("wLoad").onclick=()=>$("importFile").click();
+
+
 function parsePacket(d){
   if(!d||typeof d!=="object")return null;
   const sch=normalize(Array.isArray(d)?{blocks:d}:d.schedule||d);if(!sch)return null;
@@ -1267,7 +1298,7 @@ function sendCandidates(){
   P.forEach(p=>c.push({id:p.id,name:p.name||"Unnamed",phone:p.phone||""}));
   return c;
 }
-const sendBody=()=>`${S.name?S.name+"'s":"My"} latest schedule on Schedule I.O. Tap to load it: ${sendLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Receive from text.`;
+const sendBody=()=>`${S.name?S.name+"'s":"My"} latest schedule on Schedule I.O. Tap to load it: ${sendLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Receive → From a text.`;
 async function openSend(from){
   sendFrom=from||null;sendLink=await myLink();
   const cands=sendCandidates(),ok=id=>cands.some(c=>c.id===id&&cleanNum(c.phone));sendSel=new Set();
@@ -1293,7 +1324,7 @@ $("dSend").onclick=()=>openSend();
 
 /* --- request updates --- */
 let reqSel=new Set(),reqLink="";
-const reqBody=()=>`Hey! ${S.name||"I"} ${S.name?"is":"am"} asking for your latest Schedule I.O. update. Tap this link, then tap Send: ${reqLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Receive from text.`;
+const reqBody=()=>`Hey! ${S.name||"I"} ${S.name?"is":"am"} asking for your latest Schedule I.O. update. Tap this link, then tap Send: ${reqLink}\n\nUsing the Schedule I.O. app on your home screen? Press and hold this message, copy the link, then open the app and tap People → Receive → From a text.`;
 async function openRequest(){
   if(!P.length){toast("Add someone in People first");return}
   reqLink=appUrl()+"#r="+await pack({from:{id:S.ownerId,name:S.name,phone:S.phone||""}});
@@ -1435,9 +1466,17 @@ $("pasteGo").onclick=async()=>{
 $("pasteLoad").onclick=()=>loadPasted($("pasteText").value);
 $("pasteClose").onclick=()=>$("pasteShade").hidden=true;
 $("pasteShade").addEventListener("click",e=>{if(e.target===$("pasteShade"))$("pasteShade").hidden=true});
-$("pastePerson").onclick=openPaste;$("pasteSettings").onclick=openPaste;$("wPaste").onclick=openPaste;
+
+/* ============ receive action sheet ============ */
+function openReceive(){document.querySelectorAll(".shade").forEach(x=>x.hidden=true);$("rcvShade").hidden=false}
+$("rcvText").onclick=()=>{$("rcvShade").hidden=true;openPaste()};
+$("rcvFile").onclick=()=>{$("rcvShade").hidden=true;$("importFile").click()};
+$("rcvCancel").onclick=()=>$("rcvShade").hidden=true;
+$("rcvShade").addEventListener("click",e=>{if(e.target===$("rcvShade"))$("rcvShade").hidden=true});
+$("rcvPeople").onclick=openReceive;$("rcvSettings").onclick=openReceive;$("rcvWelcome").onclick=openReceive;
+
 // Safari handoff sheet
-$("hoCopy").onclick=async()=>{try{await navigator.clipboard.writeText(location.href);toast("Link copied. Open Schedule I.O. and tap People → Receive from text.")}catch(_){showLinkSheet("Copy this link","Press and hold to copy, then open Schedule I.O. and tap People → Receive from text.",location.href,location.href)}};
+$("hoCopy").onclick=async()=>{try{await navigator.clipboard.writeText(location.href);toast("Link copied. Open Schedule I.O. and tap People → Receive → From a text.")}catch(_){showLinkSheet("Copy this link","Press and hold to copy, then open Schedule I.O. and tap People → Receive → From a text.",location.href,location.href)}};
 $("hoHere").onclick=()=>{$("hoShade").hidden=true;route.skipHandoff=true;const h=handoffHash;handoffHash=null;handleHash(h,true)};
 // send the packet as a file attachment
 $("sendFile").onclick=()=>{$("sendShade").hidden=true;deliverPacket({app:"schedule-io",format:2,savedAt:new Date().toISOString(),owner:{id:S.ownerId,name:S.name,phone:S.phone||""},schedule:linkSchedule()},`${safeName(S.name||S.title)} - Schedule IO - ${localDate()}${PKT_EXT}`)};
