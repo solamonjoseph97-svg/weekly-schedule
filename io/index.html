@@ -312,6 +312,57 @@ button:disabled,button[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
 .tile .ico.file{background:linear-gradient(180deg,#5ab0ff,#1d6ff2)}
 .tile small{font-weight:500;font-size:11.5px;color:var(--muted);text-align:center;line-height:1.3}
 .asheet .cancel{background:var(--surface);border:0;border-radius:14px;padding:15px;font:700 16px var(--body);color:var(--accent);cursor:pointer}
+
+/* reports + productivity meter */
+.rep{max-width:760px}
+.rep-top{display:grid;grid-template-columns:210px 1fr;gap:16px;align-items:center}
+.gauge{width:100%;max-width:210px;display:block}
+.gauge .gnum{font:800 34px var(--display)}
+.gauge .glbl{font:700 11px var(--body);text-transform:uppercase;letter-spacing:.06em}
+.comp{display:flex;flex-direction:column;gap:9px}
+.comp .row{display:grid;grid-template-columns:110px 1fr 44px;gap:8px;align-items:center;font-size:13px}
+.comp .row span{color:var(--muted);font-weight:600}
+.comp .row b{font-family:var(--mono);text-align:right;font-size:12.5px}
+.bar{height:8px;border-radius:5px;background:var(--line);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:5px;background:var(--bc,var(--accent))}
+.flags{display:flex;flex-direction:column;gap:8px}
+.flag{padding:11px 13px;border-radius:12px;border-left:4px solid var(--fc);background:color-mix(in srgb,var(--fc) 10%,var(--surface))}
+.flag b{display:block;font-size:14px}
+.flag span{display:block;font-size:13px;color:var(--muted);margin-top:2px}
+.flag em{display:block;font-style:normal;font-weight:600;font-size:13px;margin-top:4px}
+.rsec{display:flex;flex-direction:column;gap:8px}
+.rsec h4{margin:4px 0 0}
+.mtab{width:100%}
+.mtab td,.mtab th{padding:7px 6px}
+.conv{display:flex;flex-wrap:wrap;gap:8px}
+.conv div{padding:8px 11px;border-radius:10px;background:var(--bg);border:1px solid var(--line-strong);font-size:13px}
+.conv b{font-family:var(--mono)}
+.cattime .row{display:grid;grid-template-columns:120px 1fr 92px;gap:8px;align-items:center;font-size:13px}
+.cattime .bar{height:10px;position:relative;background:color-mix(in srgb,var(--c) 18%,var(--line))}
+.cattime .bar i{background:var(--c)}
+.cattime b{font-family:var(--mono);font-size:12px;text-align:right}
+.mdays{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.mdays div{text-align:center;padding:7px 0;border-radius:8px;font:600 11px var(--body);background:var(--bg);border:1px solid var(--line)}
+.mdays div b{display:block;font:700 14px var(--mono)}
+.mdays div.h1{background:var(--warn-bg);border-color:transparent;color:var(--warn)}
+.mdays div.h2{background:var(--bad-bg);border-color:transparent;color:var(--bad)}
+.spark{width:100%;height:46px}
+.notes-l{display:flex;flex-direction:column;gap:6px;font-size:13px}
+.notes-l div{padding:7px 10px;border-radius:8px;background:var(--bg)}
+.dash-member{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:11px 12px;border-radius:12px;border:1px solid var(--line-strong);background:var(--bg);cursor:pointer;text-align:left;font:inherit;color:inherit;width:100%}
+.dash-member .sc{font:800 22px var(--display);min-width:46px;text-align:center;border-radius:10px;padding:4px 6px}
+.sc.good{background:var(--ok-bg);color:var(--ok)}.sc.mid{background:var(--warn-bg);color:var(--warn)}.sc.low{background:var(--bad-bg);color:var(--bad)}.sc.na{background:var(--surface);color:var(--muted);border:1px solid var(--line-strong)}
+.dash-member .nm b{display:block;font-size:14.5px}
+.dash-member .nm span{font-size:12.5px;color:var(--muted)}
+.dash-member .nm span.f{color:var(--fc);font-weight:600}
+.trend{font:700 13px var(--mono)}
+.trend.up{color:var(--ok)}.trend.down{color:var(--bad)}
+.dash-tot{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.dash-tot div{padding:10px;border-radius:10px;background:var(--bg);border:1px solid var(--line-strong)}
+.dash-tot span{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.dash-tot b{font:800 20px var(--display)}
+.dash-tot small{color:var(--muted);font-family:var(--mono);font-size:12px}
+@media (max-width:560px){.rep-top{grid-template-columns:1fr}.gauge{margin:0 auto}.cattime .row{grid-template-columns:90px 1fr 80px}}
 /* app shell: the chrome stays put, each view scrolls inside its own frame */
 html,body{height:100%}
 body{overflow:hidden;overscroll-behavior:none}
@@ -392,7 +443,7 @@ body{overflow:hidden;overscroll-behavior:none}
 <!-- PEOPLE DRAWER -->
 <aside class="drawer off" id="drawer" aria-label="People" hidden>
   <div class="dhead"><h3>People</h3><button class="btn small" id="drawerClose" type="button">Close</button></div>
-  <div class="toggle" role="group" aria-label="People view"><button id="pTabPeople" type="button" aria-pressed="true">Schedules</button><button id="pTabTeam" type="button" aria-pressed="false">Team stats</button></div>
+  <div class="toggle" role="group" aria-label="People view"><button id="pTabPeople" type="button" aria-pressed="true">Schedules</button><button id="pTabTeam" type="button" aria-pressed="false">Team report</button></div>
   <div class="actions"><button class="btn primary" id="dSend" type="button">Send my update</button><button class="btn" id="dRequest" type="button">Request updates</button><button class="btn" id="rcvPeople" type="button">Add Packet ▾</button></div>
   <div id="pPeople" class="rowlist"></div>
   <div id="pTeam" hidden></div>
@@ -473,6 +524,7 @@ body{overflow:hidden;overscroll-behavior:none}
     <p class="note" id="teamInfo"></p>
     <div id="teamEdit" class="rowlist">
       <label class="field">Team name<input id="sTeam" maxlength="40" autocomplete="off" placeholder="e.g. Austin Sales Team"></label>
+      <label class="field">Expected tracked hours per person, per week<input id="sExpH" type="number" min="0" max="80" step="1" inputmode="numeric" placeholder="e.g. 20"></label>
       <div class="pair"><label class="field">Updates due<select id="sDueDay"></select></label><label class="field">Due time<input id="sDueTime" type="time" step="900"></label></div>
     </div>
     <div class="actions">
@@ -633,6 +685,15 @@ body{overflow:hidden;overscroll-behavior:none}
     <button type="button" class="cancel" id="rcvCancel">Cancel</button>
   </div>
 </div>
+
+<!-- REPORT -->
+<div class="shade" id="repShade" hidden>
+  <div class="sheet rep" role="dialog" aria-labelledby="repName">
+    <div class="actions" style="align-items:flex-start"><div style="flex:1;min-width:0"><h3 id="repName"></h3><div class="sub" id="repSub" style="margin-top:2px"></div></div><button type="button" class="btn small" id="repClose">Close</button></div>
+    <div id="repBody" class="cbody"></div>
+    <div class="actions" id="repActs"></div>
+  </div>
+</div>
 <input type="file" id="importFile" hidden>
 <div class="drop" id="drop" hidden><div>Drop a schedule packet to load it</div></div>
 <div class="toast" id="toast" hidden></div>
@@ -700,14 +761,14 @@ function normalize(d){
     if(!(Number.isInteger(+r.day)&&+r.day>=0&&+r.day<7))return null;
     return {...base,kind:"weekly",day:+r.day,skip:Array.isArray(r.skip)?r.skip.filter(isISO):[]};
   }).filter(Boolean);
-  const metrics=(Array.isArray(d.metrics)?d.metrics:[]).filter(x=>x&&x.name).map(x=>({id:String(x.id||newId("m")),name:String(x.name).slice(0,30),cats:Array.isArray(x.cats)?x.cats.map(String):[]}));
+  const metrics=(Array.isArray(d.metrics)?d.metrics:[]).filter(x=>x&&x.name).map(x=>({id:String(x.id||newId("m")),name:String(x.name).slice(0,30),cats:Array.isArray(x.cats)?x.cats.map(String):[],target:Math.max(0,+x.target||0),stretch:Math.max(0,+x.stretch||0),fromTeam:!!x.fromTeam}));
   const checkins={};if(d.checkins&&typeof d.checkins==="object")for(const[k,v]of Object.entries(d.checkins)){if(/\|\d{4}-\d{2}-\d{2}$/.test(k)&&v&&typeof v==="object"){const mm={};if(v.m)for(const[a,b]of Object.entries(v.m))if(isFinite(+b))mm[a]=+b;checkins[k]={t:String(v.t||""),late:!!v.late,m:mm,note:String(v.note||"").slice(0,140)}}}
   const ws=d.weekStart===0||d.weekStart==="0"?0:1;
   return {v:2,ownerId:String(d.ownerId||newId("u")),name:String(d.name||"").slice(0,40),title:String(d.title||"").slice(0,40),weekStart:ws,
     startDate:isISO(d.startDate)?d.startDate:iso(weekStartOf(new Date(),ws)),tz:String(d.tz||tzId()),dayStart:ds,dayEnd:de,cats,metrics,blocks,checkins,
     phone:String(d.phone||"").slice(0,24),buffer:[10,15,20,30].includes(+d.buffer)?+d.buffer:15,
     archives:Array.isArray(d.archives)?d.archives.filter(a=>a&&Array.isArray(a.blocks)).slice(-12).map(a=>({id:String(a.id||newId("a")),name:String(a.name||"Saved schedule").slice(0,60),date:isISO(a.date)?a.date:iso(new Date()),blocks:a.blocks,cats:Array.isArray(a.cats)?a.cats:[]})):[],sendTo:Array.isArray(d.sendTo)?d.sendTo.map(String).slice(0,50):[],
-    team:d.team&&typeof d.team==="object"&&d.team.id?{id:String(d.team.id),name:String(d.team.name||"Team").slice(0,40),cadence:normCad(d.team.cadence),leaderId:String(d.team.leaderId||""),leaderName:String(d.team.leaderName||"").slice(0,40),leaderPhone:String(d.team.leaderPhone||"").slice(0,24)}:null};
+    team:d.team&&typeof d.team==="object"&&d.team.id?{id:String(d.team.id),name:String(d.team.name||"Team").slice(0,40),cadence:normCad(d.team.cadence),leaderId:String(d.team.leaderId||""),leaderName:String(d.team.leaderName||"").slice(0,40),leaderPhone:String(d.team.leaderPhone||"").slice(0,24),expectedHours:Math.max(0,+d.team.expectedHours||0)}:null};
 }
 function normCad(c){return {day:Number.isInteger(+c?.day)&&+c.day>=0&&+c.day<7?+c.day:5,time:/^\d{2}:\d{2}$/.test(c?.time)?c.time:"17:00"}}
 function load(){
@@ -1085,16 +1146,18 @@ $("pTabTeam").onclick=()=>{$("pTabTeam").setAttribute("aria-pressed","true");$("
 const initials=n=>(String(n||"?").trim().split(/\s+/).map(w=>w[0]).join("").slice(0,2)||"?").toUpperCase();
 function renderPeople(){
   const meSt=weekStats(S,weekDates(cursor),NOW);
-  let html=`<div class="person${!viewing?" active":""}"><div class="top"><div class="av" style="--c:var(--accent);--c-bg:color-mix(in srgb,var(--accent) 15%,transparent)">${esc(initials(S.name||"Me"))}</div><div class="nm"><b>${esc(S.name||"Me")} (you)</b><span>This device${meSt.rate!==null?` · ${meSt.rate}% checked in this week`:""}</span></div></div>${viewing?`<div class="acts"><button class="btn small" data-act="mine">View mine</button></div>`:""}</div>`;
+  let html=`<div class="person${!viewing?" active":""}"><div class="top"><div class="av" style="--c:var(--accent);--c-bg:color-mix(in srgb,var(--accent) 15%,transparent)">${esc(initials(S.name||"Me"))}</div><div class="nm"><b>${esc(S.name||"Me")} (you)</b><span>This device${meSt.rate!==null?` · ${meSt.rate}% checked in this week`:""}</span></div></div><div class="acts"><button class="btn small primary" data-act="myreport">My report</button>${viewing?`<button class="btn small" data-act="mine">View mine</button>`:""}</div></div>`;
   if(!P.length)html+=`<p class="note">No one added yet.</p>`;
   P.forEach(p=>{const st=weekStats(p.schedule,weekDates(cursor),new Date(p.savedAt||0));
     html+=`<div class="person${viewing===p.id?" active":""}" data-id="${esc(p.id)}"><div class="top"><div class="av" style="--c:var(--p-${colorOf(p.color)});--c-bg:var(--p-${colorOf(p.color)}-bg)">${esc(initials(p.name))}</div><div class="nm"><b>${esc(p.name||"Unnamed")}</b><span class="${staleCls(p)}">Updated ${ago(p.savedAt)}${st.rate!==null?` · ${st.rate}% checked in`:""}</span></div></div>
     <input class="row-in ppl-phone" type="tel" inputmode="tel" maxlength="24" data-act="phone" placeholder="Mobile number for texts" value="${esc(p.phone||"")}" aria-label="${esc(p.name||"Their")} mobile number">
-    <div class="acts"><button class="btn small" data-act="view" aria-pressed="${viewing===p.id}">View</button><button class="btn small" data-act="cmp" aria-pressed="${compare.has(p.id)}">Compare</button><button class="btn small" data-act="ask">Ask for update</button><button class="btn small danger" data-act="rm">Remove</button></div></div>`});
+    <div class="acts"><button class="btn small primary" data-act="report">Report</button><button class="btn small" data-act="view" aria-pressed="${viewing===p.id}">View</button><button class="btn small" data-act="cmp" aria-pressed="${compare.has(p.id)}">Compare</button><button class="btn small" data-act="ask">Ask for update</button><button class="btn small danger" data-act="rm">Remove</button></div></div>`});
   $("pPeople").innerHTML=html;
 }
 $("pPeople").addEventListener("click",async e=>{
   const b=e.target.closest("button[data-act]");if(!b)return;const id=b.closest(".person").dataset.id;const p=person(id);const act=b.dataset.act;
+  if(act==="myreport"){openReport(null);return}
+  if(act==="report"){openReport(id);return}
   if(act==="mine"){viewing=null}
   else if(act==="view"){viewing=viewing===id?null:id;if(viewing)compare.clear()}
   else if(act==="cmp"){viewing=null;compare.has(id)?compare.delete(id):compare.add(id)}
@@ -1106,20 +1169,7 @@ $("pPeople").addEventListener("click",async e=>{
   renderAll();renderPeople();if(!$("pTeam").hidden)renderTeam();
   if((act==="view"||act==="cmp")&&window.innerWidth<=640)closeDrawer();
 });
-function renderTeam(){
-  const dates=weekDates(cursor);
-  const rows=[{name:(S.name||"Me")+" (you)",sch:S,when:NOW,saved:"live"},...P.map(p=>({name:p.name||"Unnamed",sch:p.schedule,when:new Date(p.savedAt||0),saved:ago(p.savedAt)}))];
-  const stats=rows.map(r=>({...r,st:weekStats(r.sch,dates,r.when)}));
-  const mNames=[...new Set(stats.flatMap(r=>Object.keys(r.st.metrics)))];
-  const a=dates[0],b=dates[6];
-  let html=`<p class="note" style="margin-bottom:8px">Week of ${MON[a.getMonth()]} ${a.getDate()} – ${MON[b.getMonth()]} ${b.getDate()}. Each person's numbers are as of their last packet. Use ‹ › to change weeks.</p><div class="tbl"><table><thead><tr><th>Person</th><th>Done</th><th>Late</th><th>Missed</th><th>Rate</th>${mNames.map(n=>`<th>${esc(n)}</th>`).join("")}</tr></thead><tbody>`;
-  stats.forEach(r=>{html+=`<tr><td><b>${esc(r.name)}</b><br><span class="hint">${r.saved==="live"?"this device":"updated "+esc(r.saved)}</span></td><td>${r.st.done}</td><td>${r.st.late}</td><td>${r.st.missed}</td><td class="rate"><b>${r.st.rate===null?"–":r.st.rate+"%"}</b></td>${mNames.map(n=>`<td>${r.st.metrics[n]??"–"}</td>`).join("")}</tr>`});
-  if(stats.length>1){const T={done:0,late:0,missed:0,m:{}};stats.forEach(r=>{T.done+=r.st.done;T.late+=r.st.late;T.missed+=r.st.missed;mNames.forEach(n=>T.m[n]=(T.m[n]||0)+(r.st.metrics[n]||0))});const tot=T.done+T.late+T.missed;
-    html+=`<tr><td><b>Team</b></td><td>${T.done}</td><td>${T.late}</td><td>${T.missed}</td><td class="rate"><b>${tot?Math.round((T.done+T.late)/tot*100)+"%":"–"}</b></td>${mNames.map(n=>`<td><b>${T.m[n]}</b></td>`).join("")}</tr>`}
-  html+=`</tbody></table></div>`;
-  if(!S.metrics.length)html+=`<p class="note" style="margin-top:8px">Add metrics like Calls or Appointments in Settings to track numbers, not just attendance.</p>`;
-  $("pTeam").innerHTML=html;
-}
+function renderTeam(){renderDashboard()}
 
 /* ============ settings ============ */
 const hourLabel=h=>h===24?"12 AM (midnight)":fmt(h*60);
@@ -1130,7 +1180,9 @@ function renderCats(){
 }
 function renderMetrics(){
   $("metricList").innerHTML=S.metrics.length?S.metrics.map(mt=>`<div class="crow" data-id="${esc(mt.id)}"><div class="top"><input class="row-in" value="${esc(mt.name)}" maxlength="30" aria-label="Metric name" data-role="mname"><button type="button" class="btn small danger" data-role="mdel">Delete</button></div>
-    <div class="picks cats multi">${S.cats.map(c=>`<button type="button" data-role="mcat" data-c="${esc(c.id)}" style="${cvC(c)}" aria-pressed="${mt.cats.includes(c.id)}">${esc(c.name)}</button>`).join("")}</div></div>`).join(""):`<p class="note">No metrics yet.</p>`;
+    <div class="picks cats multi">${S.cats.map(c=>`<button type="button" data-role="mcat" data-c="${esc(c.id)}" style="${cvC(c)}" aria-pressed="${mt.cats.includes(c.id)}">${esc(c.name)}</button>`).join("")}</div>
+    <div class="pair"><label class="field">${mt.fromTeam&&!isLead()?"Team target / week":"Weekly target"}<input class="row-in" type="number" min="0" step="1" inputmode="numeric" data-role="mtarget" value="${mt.target||""}" placeholder="none" ${mt.fromTeam&&!isLead()?"disabled":""}></label>
+    <label class="field">My stretch target<input class="row-in" type="number" min="0" step="1" inputmode="numeric" data-role="mstretch" value="${mt.stretch||""}" placeholder="optional"></label></div></div>`).join("")+`<p class="note">List metrics in funnel order (for example Calls, Appointments, Presentations, Sales). Reports show the conversion between each step.</p>`:`<p class="note">No metrics yet.</p>`;
 }
 function openSettings(){
   $("sName").value=S.name;$("sTitle").value=S.title;$("sWeek").value=String(S.weekStart);$("sStartDate").value=S.startDate;
@@ -1160,7 +1212,8 @@ $("catList").addEventListener("click",e=>{
   }
 });
 $("catAdd").onclick=()=>{const used=S.cats.map(c=>c.color);S.cats.push({id:newId("c"),name:"New category",color:PALETTE.find(p=>!used.includes(p))||"gray",track:true});renderCats();renderMetrics();const ins=$("catList").querySelectorAll('[data-role="name"]');const l=ins[ins.length-1];l.focus();l.select()};
-$("metricList").addEventListener("input",e=>{if(e.target.dataset.role!=="mname")return;const mt=S.metrics.find(x=>x.id===e.target.closest(".crow").dataset.id);if(mt)mt.name=e.target.value.slice(0,30)||"Metric"});
+$("metricList").addEventListener("input",e=>{const r=e.target.dataset.role;if(r==="mtarget"||r==="mstretch"){const mt=S.metrics.find(x=>x.id===e.target.closest(".crow").dataset.id);if(mt)mt[r==="mtarget"?"target":"stretch"]=Math.max(0,+e.target.value||0);return}
+  if(e.target.dataset.role!=="mname")return;const mt=S.metrics.find(x=>x.id===e.target.closest(".crow").dataset.id);if(mt)mt.name=e.target.value.slice(0,30)||"Metric"});
 $("metricList").addEventListener("click",e=>{
   const btn=e.target.closest("button");if(!btn)return;const mt=S.metrics.find(x=>x.id===btn.closest(".crow").dataset.id);if(!mt)return;
   if(btn.dataset.role==="mcat"){const c=btn.dataset.c;mt.cats=mt.cats.includes(c)?mt.cats.filter(x=>x!==c):[...mt.cats,c];renderMetrics();return}
@@ -1359,18 +1412,18 @@ function renderTeamSettings(){
     :"Lead a team: name it, pick when updates are due, and share the invite link. Everyone who joins gets your metrics and sends updates to you.";
   $("teamEdit").hidden=!lead;$("teamInvite").hidden=!lead;$("teamLeave").hidden=!t;$("teamLeave").textContent=lead?"Delete team":"Leave team";$("teamLeave").dataset.armed="";
   $("sDueDay").innerHTML=WDL.map((d,i)=>`<option value="${i}">${d}</option>`).join("");
-  $("sTeam").value=t?t.name:"";$("sDueDay").value=String(t?t.cadence.day:5);$("sDueTime").value=t?t.cadence.time:"17:00";
+  $("sTeam").value=t?t.name:"";$("sExpH").value=t&&t.expectedHours?t.expectedHours:"";$("sDueDay").value=String(t?t.cadence.day:5);$("sDueTime").value=t?t.cadence.time:"17:00";
 }
 function syncLeadTeam(create){
   if(!isLead())return;if(!S.team&&!create)return;
-  S.team={id:S.team?.id||newId("t"),name:$("sTeam").value.trim()||(S.name?S.name+"'s Team":"My Team"),cadence:normCad({day:+$("sDueDay").value,time:$("sDueTime").value}),leaderId:S.ownerId,leaderName:S.name,leaderPhone:S.phone||""};
+  S.team={id:S.team?.id||newId("t"),name:$("sTeam").value.trim()||(S.name?S.name+"'s Team":"My Team"),cadence:normCad({day:+$("sDueDay").value,time:$("sDueTime").value}),leaderId:S.ownerId,leaderName:S.name,leaderPhone:S.phone||"",expectedHours:Math.max(0,+$("sExpH").value||0)};
 }
-$("sTeam").oninput=()=>syncLeadTeam(false);$("sDueDay").onchange=()=>{syncLeadTeam(false);renderTeamSettings()};$("sDueTime").onchange=()=>{syncLeadTeam(false);renderTeamSettings()};
+$("sTeam").oninput=()=>syncLeadTeam(false);$("sExpH").oninput=()=>syncLeadTeam(false);$("sDueDay").onchange=()=>{syncLeadTeam(false);renderTeamSettings()};$("sDueTime").onchange=()=>{syncLeadTeam(false);renderTeamSettings()};
 $("sPhone").oninput=e=>{S.phone=e.target.value.trim().slice(0,24);if(S.team&&isLead())S.team.leaderPhone=S.phone};
 $("teamInvite").onclick=async()=>{
   syncLeadTeam(true);if(!S.phone)toast("Tip: add your mobile number above so updates text straight to you");
   persist();renderTeamSettings();
-  const link=appUrl()+"#t="+await pack({team:{id:S.team.id,name:S.team.name,cadence:S.team.cadence},leader:{id:S.ownerId,name:S.name,phone:S.phone||""},metrics:S.metrics.map(mt=>({name:mt.name,cats:mt.cats.map(id=>catOf(S,id).name)}))});
+  const link=appUrl()+"#t="+await pack({team:{id:S.team.id,name:S.team.name,cadence:S.team.cadence,expectedHours:S.team.expectedHours||0},leader:{id:S.ownerId,name:S.name,phone:S.phone||""},metrics:S.metrics.map(mt=>({name:mt.name,cats:mt.cats.map(id=>catOf(S,id).name),target:mt.target||0}))});
   $("setShade").hidden=true;
   showLinkSheet(`Invite to ${S.team.name}`,"Send this to your team. Opening it sets up the team, your metrics, and sends their updates to you. Then use Request updates to collect everyone's week.",link,`Join ${S.team.name} on Schedule I.O. (free, no account). Tap to set it up: ${link}`);
 };
@@ -1386,12 +1439,13 @@ function openJoin(d){
   document.querySelectorAll(".shade").forEach(x=>x.hidden=true);$("joinShade").hidden=false;
 }
 function applyTeam(d){
-  S.team={id:String(d.team.id||newId("t")),name:String(d.team.name||"Team").slice(0,40),cadence:normCad(d.team.cadence),leaderId:String(d.leader&&d.leader.id||""),leaderName:String(d.leader&&d.leader.name||"").slice(0,40),leaderPhone:String(d.leader&&d.leader.phone||"").slice(0,24)};
+  S.team={id:String(d.team.id||newId("t")),name:String(d.team.name||"Team").slice(0,40),cadence:normCad(d.team.cadence),leaderId:String(d.leader&&d.leader.id||""),leaderName:String(d.leader&&d.leader.name||"").slice(0,40),leaderPhone:String(d.leader&&d.leader.phone||"").slice(0,24),expectedHours:Math.max(0,+d.team.expectedHours||0)};
   (d.metrics||[]).forEach(tm=>{const name=String(tm.name||"").trim().slice(0,30);if(!name)return;
     const want=(tm.cats||[]).map(n=>S.cats.find(c=>c.name.toLowerCase()===String(n).toLowerCase())).filter(Boolean).map(c=>c.id);
     const cats=want.length?want:S.cats.filter(c=>c.track).map(c=>c.id);
     const mt=S.metrics.find(x=>x.name.trim().toLowerCase()===name.toLowerCase());
-    if(!mt)S.metrics.push({id:newId("m"),name,cats});else if(!mt.cats.length)mt.cats=cats});
+    const tgt=Math.max(0,+tm.target||0);
+    if(!mt)S.metrics.push({id:newId("m"),name,cats,target:tgt,stretch:0,fromTeam:true});else{if(!mt.cats.length)mt.cats=cats;mt.target=tgt;mt.fromTeam=true}});
   S.sendTo=[...new Set([...(S.sendTo||[]),S.team.leaderId])];
   commit();
 }
@@ -1724,6 +1778,141 @@ $("coachQuit").onclick=e=>armed(e.target,"Exit coach","Tap again to exit",()=>{$
 $("coachBtn").onclick=openCoach;
 
 document.addEventListener("touchstart",()=>{},{passive:true});
+
+/* ============ reports, productivity meter, diagnoses ============ */
+const WTS={follow:.40,output:.35,ontime:.15,planning:.10};
+const COMP_LABEL={follow:"Follow-through",output:"Output vs target",ontime:"On time",planning:"Planned hours"};
+const pct=x=>x==null?"–":Math.round(x*100)+"%";
+const band=sc=>sc==null?"na":sc>=75?"good":sc>=50?"mid":"low";
+const bandColor=sc=>sc==null?"var(--line-strong)":sc>=75?"var(--ok)":sc>=50?"var(--warn)":"var(--bad)";
+const hh=min=>{const h=Math.round(min/6)/10;return (h%1?h.toFixed(1):h)+"h"};
+function weekData(sch,dates,when){
+  const r={done:0,late:0,missed:0,upcoming:0,total:0,trackedMin:0,plannedByCat:{},doneByCat:{},metrics:{},notes:[],missDay:[0,0,0,0,0,0,0],missTod:{morning:0,afternoon:0,evening:0}};
+  dates.forEach(d=>occ(sch,d).forEach(o=>{
+    const dm=o.e-o.s;r.plannedByCat[o.cat]=(r.plannedByCat[o.cat]||0)+dm;
+    const st=status(sch,o,when);
+    const ci=sch.checkins[o.b.id+"|"+o.date];
+    if(ci){for(const[mid,v]of Object.entries(ci.m)){const mt=sch.metrics.find(x=>x.id===mid);if(mt){const n=mt.name.trim();r.metrics[n]=(r.metrics[n]||0)+v}}if(ci.note)r.notes.push({date:o.date,title:o.title,note:ci.note})}
+    if(!st)return;r.total++;r.trackedMin+=dm;
+    if(st==="done"||st==="late"){r[st]++;r.doneByCat[o.cat]=(r.doneByCat[o.cat]||0)+dm}
+    else if(st==="missed"){r.missed++;r.missDay[mon0(d)]++;r.missTod[o.s<720?"morning":o.s<1020?"afternoon":"evening"]++}
+    else r.upcoming++;
+  }));
+  return r;
+}
+function scoreWeek(sch,wd,expH){
+  const c={},el=wd.done+wd.late+wd.missed;
+  c.follow=el?(wd.done+wd.late)/el:null;
+  c.ontime=(wd.done+wd.late)?wd.done/(wd.done+wd.late):null;
+  const frac=wd.total?Math.max(.15,el/wd.total):1; // targets are prorated through the week
+  const outs=sch.metrics.filter(mt=>(+mt.target||+mt.stretch)>0).map(mt=>Math.min(1,(wd.metrics[mt.name.trim()]||0)/((+mt.target||+mt.stretch)*frac)));
+  c.output=outs.length?outs.reduce((a,b)=>a+b,0)/outs.length:null;
+  c.planning=expH?Math.min(1,wd.trackedMin/60/expH):null;
+  let num=0,den=0;for(const k in WTS)if(c[k]!=null){num+=WTS[k]*c[k];den+=WTS[k]}
+  const enough=el>=5;
+  return {c,score:enough&&den?Math.round(num/den*100):null,enough,elapsed:el};
+}
+function buildReport(sch,when){
+  const dates=weekDates(cursor),expH=(sch.team&&+sch.team.expectedHours)||(S.team&&+S.team.expectedHours)||0;
+  const wd=weekData(sch,dates,when),sc=scoreWeek(sch,wd,expH);
+  const hist=[4,3,2,1].map(k=>{const ds=weekDates(addDays(cursor,-7*k));return scoreWeek(sch,weekData(sch,ds,when),expH).score});
+  const funnel=sch.metrics.map(mt=>({name:mt.name.trim(),val:Math.round((wd.metrics[mt.name.trim()]||0)*10)/10,target:+mt.target||0,stretch:+mt.stretch||0}));
+  const conv=[];for(let i=1;i<funnel.length;i++){const a=funnel[i-1],b=funnel[i];if(a.val>0)conv.push({key:a.name+"→"+b.name,from:a.name,to:b.name,from_v:a.val,pct:b.val/a.val})}
+  const prior=hist.filter(x=>x!=null);const avg=prior.length?prior.reduce((a,b)=>a+b,0)/prior.length:null;
+  return {sch,when,dates,wd,sc,hist,funnel,conv,expH,avg,trend:sc.score!=null&&avg!=null?sc.score-avg:null};
+}
+function teamConvAvg(reps){const acc={};reps.forEach(r=>r.conv.forEach(c=>{if(c.from_v>=10){(acc[c.key]=acc[c.key]||[]).push(c.pct)}}));const out={};for(const k in acc)if(acc[k].length>=2)out[k]=acc[k].reduce((a,b)=>a+b,0)/acc[k].length;return out}
+function diagnose(rep,tAvg,staleDays){
+  const f=[],{sc,wd,conv,funnel,expH,hist}=rep,c=sc.c;
+  if(staleDays>=5)f.push({k:"stale",fc:"var(--warn)",t:`No update in ${staleDays} days`,why:"Their numbers here may be out of date.",act:"Request an update."});
+  if(!sc.enough){f.push({k:"info",fc:"var(--muted)",t:"Not enough data yet",why:`${sc.elapsed} tracked block${sc.elapsed===1?"":"s"} so far this week. Scores start after 5.`,act:"Check back later in the week."});return f}
+  if(c.follow!=null&&c.follow<.6&&(c.output==null||c.output<.5))f.push({k:"engage",fc:"var(--bad)",t:"Engagement",why:`Checked in to ${pct(c.follow)} of planned blocks${c.output!=null?", reached "+pct(c.output)+" of target output":""}.`,act:"Have a one-on-one: what's getting in the way?"});
+  if(c.follow!=null&&c.follow>=.7)conv.forEach(cv=>{const t=tAvg[cv.key];if(t&&cv.from_v>=10&&cv.pct<.6*t)f.push({k:"skill",fc:"var(--bad)",t:"Skill: conversion",why:`${cv.to} per ${cv.from}: ${pct(cv.pct)} vs team ${pct(t)}. The effort is there; results aren't converting.`,act:`Role-play or review their approach from ${cv.from} to ${cv.to}.`})});
+  if(c.planning!=null&&c.planning<.6)f.push({k:"plan",fc:"var(--warn)",t:"Planning",why:`Only ${hh(wd.trackedMin)} of tracked work planned vs ${expH}h expected.`,act:"Rebuild their week together with the Coach."});
+  if(wd.missed>=3){const mx=Math.max(...wd.missDay),di=wd.missDay.indexOf(mx);const todK=Object.keys(wd.missTod).reduce((a,b)=>wd.missTod[a]>=wd.missTod[b]?a:b);
+    if(mx>=2&&mx/wd.missed>=.5)f.push({k:"fit",fc:"var(--warn)",t:`Misses cluster on ${WDL[(di+1)%7]}s`,why:`${mx} of ${wd.missed} missed blocks were on ${WDL[(di+1)%7]}.`,act:"Ask what happens that day; move or shrink those blocks."});
+    else if(wd.missTod[todK]/wd.missed>=.6)f.push({k:"fit",fc:"var(--warn)",t:`Misses cluster in the ${todK}`,why:`${wd.missTod[todK]} of ${wd.missed} missed blocks were in the ${todK}.`,act:`Move ${todK} blocks to a time that fits their life.`})}
+  const h=[...hist,sc.score];if(h[2]!=null&&h[3]!=null&&h[4]!=null&&h[2]>h[3]&&h[3]>h[4]&&h[2]-h[4]>=10)f.push({k:"drift",fc:"var(--bad)",t:"Trending down",why:`Meter dropped ${h[2]} → ${h[3]} → ${h[4]} over three weeks.`,act:"Talk now, before it becomes a slump."});
+  if(c.ontime!=null&&c.ontime<.6&&wd.done+wd.late>=4)f.push({k:"late",fc:"var(--warn)",t:"Often late",why:`Only ${pct(c.ontime)} of check-ins were on time.`,act:"Ask what's making them late; start times may be unrealistic."});
+  if(!f.filter(x=>x.k!=="stale").length&&sc.score!=null&&sc.score>=75)f.push({k:"good",fc:"var(--ok)",t:"On track",why:`Strong week: meter ${sc.score}.`,act:"Recognize it. Wins repeated get repeated."});
+  return f;
+}
+function gauge(score){
+  const s=score==null?0:Math.max(0,Math.min(100,score)),a=Math.PI*(1-s/100),x=90+70*Math.cos(a),y=90-70*Math.sin(a);
+  return `<svg viewBox="0 0 180 106" class="gauge" role="img" aria-label="Productivity meter ${score==null?"not enough data":score}"><path d="M20 90 A70 70 0 0 1 160 90" fill="none" stroke="var(--line)" stroke-width="14" stroke-linecap="round"/>${score!=null&&s>0?`<path d="M20 90 A70 70 0 0 1 ${x.toFixed(1)} ${y.toFixed(1)}" fill="none" stroke="${bandColor(score)}" stroke-width="14" stroke-linecap="round"/>`:""}<text x="90" y="80" text-anchor="middle" class="gnum" fill="var(--fg)">${score==null?"–":score}</text><text x="90" y="101" text-anchor="middle" class="glbl" fill="${bandColor(score)}">${score==null?"Not enough data":score>=75?"On track":score>=50?"Watch":"Needs help"}</text></svg>`;
+}
+function spark(vals){
+  const pts=vals.map((v,i)=>v==null?null:[10+i*(280/(vals.length-1)),40-v*.34]);const seg=pts.filter(Boolean);
+  if(seg.length<2)return `<p class="note">Trend appears after two scored weeks.</p>`;
+  return `<svg viewBox="0 0 300 46" class="spark" preserveAspectRatio="none"><polyline points="${seg.map(p=>p.join(",")).join(" ")}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${pts.map((p,i)=>p?`<circle cx="${p[0]}" cy="${p[1]}" r="${i===pts.length-1?4.5:3}" fill="${i===pts.length-1?bandColor(vals[i]):"var(--accent)"}"/>`:"").join("")}</svg><div class="hint" style="display:flex;justify-content:space-between"><span>4 weeks ago</span><span>This week</span></div>`;
+}
+function rowsForTeam(){
+  const me={id:null,name:(S.name||"Me"),sch:S,when:NOW,ago:"live",stale:0,phone:S.phone};
+  return [me,...P.map(p=>({id:p.id,name:p.name||"Unnamed",sch:p.schedule,when:new Date(p.savedAt||0),ago:ago(p.savedAt),stale:Math.floor((Date.now()-new Date(p.savedAt||0).getTime())/864e5),phone:p.phone}))];
+}
+let repFor=null;
+function openReport(id){
+  repFor=id;const rows=rowsForTeam(),reps=rows.map(r=>({...r,rep:buildReport(r.sch,r.when)})),tAvg=teamConvAvg(reps.map(r=>r.rep));
+  const row=reps.find(r=>r.id===id)||reps[0],R=row.rep,flags=diagnose(R,tAvg,row.stale),c=R.sc.c,a=R.dates[0],b=R.dates[6];
+  $("repName").textContent=id?`${row.name}'s report`:"My report";
+  $("repSub").textContent=`Week of ${MON[a.getMonth()]} ${a.getDate()} – ${MON[b.getMonth()]} ${b.getDate()} · ${id?"as of their update "+row.ago:"live"}`;
+  const cats=R.sch.cats.filter(ct=>R.wd.plannedByCat[ct.id]&&catOf(R.sch,ct.id).track);
+  let h=`<div class="rep-top">${gauge(R.sc.score)}<div class="comp">${Object.keys(WTS).map(k=>`<div class="row"><span>${COMP_LABEL[k]}</span><div class="bar"><i style="width:${c[k]==null?0:Math.round(c[k]*100)}%;--bc:${c[k]==null?"var(--line)":bandColor(c[k]*100)}"></i></div><b>${c[k]==null?"n/a":pct(c[k])}</b></div>`).join("")}
+    <div class="hint">Weights: follow-through 40%, output 35%, on time 15%, planning 10%. Parts without data are left out.${R.trend!=null?` <span class="trend ${R.trend>=0?"up":"down"}">${R.trend>=0?"▲":"▼"} ${Math.abs(Math.round(R.trend))} vs 4-week avg</span>`:""}</div></div></div>
+  <div class="rsec"><h4>What to focus on</h4><div class="flags">${flags.map(f=>`<div class="flag" style="--fc:${f.fc}"><b>${esc(f.t)}</b><span>${esc(f.why)}</span><em>${esc(f.act)}</em></div>`).join("")||`<p class="note">Nothing flagged.</p>`}</div></div>`;
+  if(R.funnel.length){h+=`<div class="rsec"><h4>Metrics</h4><div class="tbl"><table class="mtab"><thead><tr><th>Metric</th><th>This week</th><th>Target</th><th>Progress</th></tr></thead><tbody>${R.funnel.map(f=>{const t=f.target||f.stretch;return `<tr><td><b>${esc(f.name)}</b>${f.stretch&&f.target?`<br><span class="hint">stretch ${f.stretch}</span>`:""}</td><td>${f.val}</td><td>${t||"–"}</td><td>${t?`<div class="bar" style="min-width:70px"><i style="width:${Math.min(100,Math.round(f.val/t*100))}%;--bc:${bandColor(f.val/t*100)}"></i></div>`:"–"}</td></tr>`}).join("")}</tbody></table></div>
+    ${R.conv.length?`<div class="conv">${R.conv.map(cv=>`<div>${esc(cv.to)} per ${esc(cv.from)}: <b>${pct(cv.pct)}</b>${tAvg[cv.key]?` <span class="hint">team ${pct(tAvg[cv.key])}</span>`:""}</div>`).join("")}</div>`:""}</div>`}
+  else h+=`<div class="rsec"><h4>Metrics</h4><p class="note">No metrics yet. Add them in Settings → Metrics (for example Calls and Appointments) to measure output, not just attendance.</p></div>`;
+  if(cats.length)h+=`<div class="rsec"><h4>Planned vs done</h4><div class="cattime">${cats.map(ct=>{const pl=R.wd.plannedByCat[ct.id]||0,dn=R.wd.doneByCat[ct.id]||0;return `<div class="row" style="${cvC(ct)}"><span>${esc(ct.name)}</span><div class="bar"><i style="width:${pl?Math.min(100,Math.round(dn/pl*100)):0}%"></i></div><b>${hh(dn)} / ${hh(pl)}</b></div>`}).join("")}</div></div>`;
+  h+=`<div class="rsec"><h4>Misses by day</h4><div class="mdays">${dayOrderM().map(d=>{const n=R.wd.missDay[d];return `<div class="${n>=2?"h2":n===1?"h1":""}">${dname(d)}<b>${n}</b></div>`}).join("")}</div></div>
+  <div class="rsec"><h4>Trend</h4>${spark([...R.hist,R.sc.score])}</div>`;
+  if(R.wd.notes.length)h+=`<div class="rsec"><h4>Check-in notes</h4><div class="notes-l">${R.wd.notes.slice(-6).map(n=>`<div><b>${esc(dShort(parseD(n.date)))} · ${esc(n.title)}:</b> ${esc(n.note)}</div>`).join("")}</div></div>`;
+  $("repBody").innerHTML=h;
+  $("repActs").innerHTML=id?`${row.stale>=3?`<button type="button" class="btn primary" data-ra="req">Request update</button>`:""}${cleanNum(row.phone)?`<button type="button" class="btn" data-ra="text">Text ${esc(row.name)}</button>`:""}<button type="button" class="btn" data-ra="view">View schedule</button>`:`<button type="button" class="btn primary" data-ra="send">Send my update</button>`;
+  document.querySelectorAll(".shade").forEach(x=>x.hidden=true);$("repShade").hidden=false;
+}
+$("repClose").onclick=()=>$("repShade").hidden=true;
+$("repShade").addEventListener("click",e=>{if(e.target===$("repShade"))$("repShade").hidden=true});
+$("repActs").addEventListener("click",e=>{const b=e.target.closest("[data-ra]");if(!b)return;const a=b.dataset.ra,p=repFor&&person(repFor);$("repShade").hidden=true;
+  if(a==="send")openSend();else if(a==="req"){openRequest().then(()=>{reqSel=new Set([repFor]);renderReq()})}
+  else if(a==="text"&&p)launchMessage([p.phone],`Hey ${p.name||""}, checking in on your week. How's it going?`);
+  else if(a==="view"){viewing=repFor;compare.clear();closeDrawer();renderAll()}});
+
+/* ---- team dashboard ---- */
+function teamSummary(){
+  const rows=rowsForTeam(),reps=rows.map(r=>({...r,rep:buildReport(r.sch,r.when)})),tAvg=teamConvAvg(reps.map(r=>r.rep));
+  reps.forEach(r=>{r.flags=diagnose(r.rep,tAvg,r.stale);r.need=r.flags.filter(f=>!["good","info"].includes(f.k))});
+  const scored=reps.filter(r=>r.rep.sc.score!=null),avgScore=scored.length?Math.round(scored.reduce((a,r)=>a+r.rep.sc.score,0)/scored.length):null;
+  const el=reps.reduce((a,r)=>a+r.rep.wd.done+r.rep.wd.late+r.rep.wd.missed,0),dl=reps.reduce((a,r)=>a+r.rep.wd.done+r.rep.wd.late,0);
+  const names=[...new Set(reps.flatMap(r=>r.rep.funnel.map(f=>f.name)))];
+  const tot=names.map(n=>{let v=0,t=0;reps.forEach(r=>{const f=r.rep.funnel.find(x=>x.name===n);if(f){v+=f.val;t+=f.target||0}});return {n,v:Math.round(v*10)/10,t}});
+  const tconv=[];for(let i=1;i<tot.length;i++)if(tot[i-1].v>0)tconv.push({from:tot[i-1].n,to:tot[i].n,pct:tot[i].v/tot[i-1].v});
+  reps.sort((x,y)=>(y.need.length-x.need.length)||((x.rep.sc.score??101)-(y.rep.sc.score??101)));
+  return {reps,avgScore,follow:el?dl/el:null,tot,tconv};
+}
+function renderDashboard(){
+  const T=teamSummary(),a=weekDates(cursor)[0],b=weekDates(cursor)[6];
+  let h=`<p class="note" style="margin-bottom:6px">Week of ${MON[a.getMonth()]} ${a.getDate()} – ${MON[b.getMonth()]} ${b.getDate()}${S.team?" · "+esc(S.team.name):""}. Each person is as of their last update. Use ‹ › to change weeks.</p>
+  <div class="dash-tot"><div><span>Team meter</span><b style="color:${bandColor(T.avgScore)}">${T.avgScore??"–"}</b></div><div><span>Follow-through</span><b>${pct(T.follow)}</b></div>${T.tot.map(t=>`<div><span>${esc(t.n)}</span><b>${t.v}</b>${t.t?` <small>/ ${t.t}</small>`:""}</div>`).join("")}</div>
+  ${T.tconv.length?`<div class="conv" style="margin-top:8px">${T.tconv.map(c=>`<div>${esc(c.to)} per ${esc(c.from)}: <b>${pct(c.pct)}</b></div>`).join("")}</div>`:""}
+  <div class="actions" style="margin:10px 0"><button type="button" class="btn primary small" id="shareSummary">Share weekly summary</button></div>
+  <div class="rowlist">${T.reps.map(r=>{const top=r.need[0]||r.flags[0];const tr=r.rep.trend;return `<button type="button" class="dash-member" data-rid="${r.id||""}"><span class="sc ${band(r.rep.sc.score)}">${r.rep.sc.score??"–"}</span><span class="nm"><b>${esc(r.name)}${r.id?"":" (you)"}</b>${top?`<span class="f" style="--fc:${top.fc}">${esc(top.t)}</span>`:""}<span> · ${r.id?"updated "+esc(r.ago):"live"}</span></span>${tr!=null?`<span class="trend ${tr>=0?"up":"down"}">${tr>=0?"▲":"▼"}${Math.abs(Math.round(tr))}</span>`:"<span></span>"}</button>`}).join("")}</div>
+  ${S.metrics.some(m=>m.target)?"":`<p class="note" style="margin-top:8px">Set weekly targets in Settings → Metrics so the meter can score output.</p>`}`;
+  $("pTeam").innerHTML=h;
+  $("shareSummary").onclick=()=>{const txt=summaryText(T);shareText(txt)};
+  $("pTeam").querySelectorAll(".dash-member").forEach(btn=>btn.onclick=()=>openReport(btn.dataset.rid||null));
+}
+function summaryText(T){
+  const a=weekDates(cursor)[0],b=weekDates(cursor)[6];
+  const lines=[`${S.team?S.team.name:"Team"} · week of ${MON[a.getMonth()]} ${a.getDate()}–${MON[b.getMonth()]} ${b.getDate()}`,
+    `Team meter ${T.avgScore??"–"} · Follow-through ${pct(T.follow)}`];
+  if(T.tot.length)lines.push(T.tot.map(t=>`${t.n} ${t.v}${t.t?"/"+t.t:""}`).join(" · "));
+  if(T.tconv.length)lines.push(T.tconv.map(c=>`${c.to} per ${c.from} ${pct(c.pct)}`).join(" · "));
+  const help=T.reps.filter(r=>r.need.length),good=T.reps.filter(r=>!r.need.length&&r.rep.sc.score!=null&&r.rep.sc.score>=75);
+  if(help.length)lines.push("","Needs help:",...help.map(r=>`• ${r.name}: ${r.need[0].t}${r.rep.sc.score!=null?" ("+r.rep.sc.score+")":""}`));
+  if(good.length)lines.push("","On track: "+good.map(r=>`${r.name} ${r.rep.sc.score}`).join(", "));
+  return lines.join("\n");
+}
 /* ============ welcome ============ */
 $("stripes").innerHTML=PALETTE.slice(0,8).map(c=>`<i style="--sw:var(--p-${c})"></i>`).join("");
 function startWith(example){
