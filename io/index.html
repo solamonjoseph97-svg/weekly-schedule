@@ -150,6 +150,15 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .stripes i{flex:1;border-radius:3px;background:var(--sw)}
 @media (max-width:480px){.choice{grid-template-columns:1fr}}
 
+
+.drop{position:fixed;inset:0;z-index:40;background:color-mix(in srgb,var(--accent) 14%,transparent);display:flex;align-items:center;justify-content:center;padding:24px;pointer-events:none}
+.drop div{border:3px dashed var(--accent);border-radius:18px;background:var(--surface);color:var(--fg);padding:28px 32px;font-weight:700;font-size:17px;text-align:center;max-width:420px}
+.pkt{display:flex;gap:12px;align-items:center;padding:12px;border-radius:10px;background:var(--bg);border:1px solid var(--line-strong)}
+.pkt .ic{width:40px;height:48px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:flex;align-items:flex-end;justify-content:center;font:700 9px var(--mono);padding-bottom:6px;flex:none}
+.pkt b{display:block;font-size:15px;overflow-wrap:anywhere}
+.pkt span{font-size:13px;color:var(--muted)}
+.stack{display:flex;flex-direction:column;gap:8px}
+.stack .btn{width:100%;padding:11px 14px;font-size:14px}
 @media (prefers-reduced-motion:no-preference){.ev{transition:filter .12s}.ev:hover{filter:brightness(.97) saturate(1.1)}}
 </style>
 </head>
@@ -167,6 +176,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
       <button type="button" id="wBlank"><b>Start blank</b><span>An empty week with ready-made categories.</span></button>
       <button type="button" id="wExample"><b>Start from an example</b><span>A sample work week you can edit or clear.</span></button>
     </div>
+    <button type="button" class="btn" id="wLoad" style="align-self:flex-start">Have a packet? Load it</button>
   </div>
 </div>
 
@@ -230,12 +240,11 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
     <h4>Categories</h4>
     <div class="catlist" id="catList"></div>
     <div class="actions"><button type="button" class="btn small" id="catAdd">+ Add category</button></div>
-    <h4>Backup &amp; devices</h4>
-    <p class="note">Your schedule is stored only on this device. To move it to another device, export a backup here and import it there.</p>
+    <h4>Schedule packet</h4>
+    <p class="note">Your schedule lives only on this device. Save a packet to your Files (or AirDrop or text it) to back it up or move it to another device. Load it there with Load packet.</p>
     <div class="actions">
-      <button type="button" class="btn small" id="exportBtn">Export backup</button>
-      <button type="button" class="btn small" id="importBtn">Import backup</button>
-      <input type="file" id="importFile" accept=".json,application/json" hidden>
+      <button type="button" class="btn small" id="exportBtn">Save packet</button>
+      <button type="button" class="btn small" id="importBtn">Load packet</button>
     </div>
     <h4>Start over</h4>
     <div class="actions">
@@ -245,6 +254,21 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
     <div class="actions"><span class="sp"></span><button type="button" class="btn primary" id="setDone">Done</button></div>
   </div>
 </div>
+<input type="file" id="importFile" hidden>
+
+<div class="shade" id="impShade" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="impHead">
+    <h3 id="impHead">Load packet</h3>
+    <div class="pkt"><div class="ic">PKT</div><div><b id="impName"></b><span id="impSummary"></span></div></div>
+    <div class="stack">
+      <button type="button" class="btn primary" id="impReplace">Replace my schedule</button>
+      <button type="button" class="btn" id="impMerge">Add to my schedule</button>
+      <button type="button" class="btn" id="impCancel">Cancel</button>
+    </div>
+    <p class="hint" id="impNote" style="margin:0;font-size:12.5px;color:var(--muted)">Replace swaps your current schedule for this one. Add keeps yours and adds any blocks you don't already have.</p>
+  </div>
+</div>
+<div class="drop" id="drop" hidden><div>Drop your schedule packet to load it</div></div>
 <div class="toast" id="toast" hidden></div>
 
 <script>
@@ -255,6 +279,7 @@ const DEFAULT_CATS=[
   {id:"study",name:"Study",color:"orange"},{id:"fitness",name:"Fitness",color:"purple"},
   {id:"meetings",name:"Meetings",color:"green"},{id:"personal",name:"Personal",color:"teal"},
   {id:"social",name:"Family & Friends",color:"pink"}];
+const KNOWN_CATS={routine:["Routine","blue"],study:["Study","orange"],fitness:["Fitness","purple"],sales:["Prospecting & Calls","pink"],content:["Content","yellow"],meeting:["Team & Meetings","green"],life:["Faith & Family","teal"],build:["Build","indigo"],work:["Work","indigo"],meetings:["Meetings","green"],personal:["Personal","teal"],social:["Family & Friends","pink"]};
 const EXAMPLE=[
   ...[0,1,2,3,4].flatMap(d=>[[d,"07:00","07:30","Morning routine","routine"],[d,"09:00","12:00","Deep work","work"],
      [d,"12:00","13:00","Lunch","personal"],[d,"13:00","17:00","Work","work"]]),
@@ -287,6 +312,7 @@ function normalize(d){
   if(!d||typeof d!=="object"||!Array.isArray(d.blocks))return null;
   const cats=(Array.isArray(d.cats)&&d.cats.length?d.cats:DEFAULT_CATS).filter(c=>c&&c.id).map(c=>({id:String(c.id),name:String(c.name||"Category").slice(0,30),color:colorOf(c.color)}));
   const ds=Number.isInteger(+d.dayStart)?Math.max(0,Math.min(12,+d.dayStart)):6, de=Number.isInteger(+d.dayEnd)?Math.max(ds+4,Math.min(24,+d.dayEnd)):24;
+  d.blocks.forEach(r=>{const id=String(r&&r.cat||"");if(id&&!cats.some(c=>c.id===id)){const k=KNOWN_CATS[id];cats.push({id,name:k?k[0]:id.slice(0,30),color:k?k[1]:PALETTE[cats.length%PALETTE.length]})}});
   return {v:1,title:String(d.title||"").slice(0,40),dayStart:ds,dayEnd:de,cats,
     blocks:d.blocks.filter(validBlock).map(r=>({id:String(r.id||newId()),day:+r.day,start:r.start,end:r.end,title:String(r.title||"Untitled").slice(0,60),cat:String(r.cat||cats[0].id)}))};
 }
@@ -519,21 +545,62 @@ function armed(btn,label,armedLabel,fn){
 }
 $("clearBtn").onclick=e=>armed(e.target,"Clear all blocks","Tap again: removes every block",()=>{S.blocks=[];renderCats();toast("All blocks cleared")});
 $("eraseBtn").onclick=e=>armed(e.target,"Erase everything","Tap again: erases all data",()=>{try{localStorage.removeItem(KEY);localStorage.removeItem(KEY+".view")}catch(_){}S=null;$("setShade").hidden=true;boot()});
-$("exportBtn").onclick=async()=>{
-  const json=JSON.stringify({app:"schedule-io",exported:new Date().toISOString(),...S},null,2);
-  const name=`schedule-io-backup-${new Date().toISOString().slice(0,10)}.json`;
-  const file=new File([json],name,{type:"application/json"});
-  try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:"Schedule I.O. backup"});return}}catch(err){if(err&&err.name==="AbortError")return}
-  const a=document.createElement("a");a.href=URL.createObjectURL(file);a.download=name;document.body.appendChild(a);a.click();
-  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);toast("Backup exported");
-};
+$("exportBtn").onclick=()=>deliverPacket({app:"schedule-io",format:1,saved:new Date().toISOString(),schedule:S},`${safeName(S.title)} - Schedule IO - ${localDate()}${PKT_EXT}`);
 $("importBtn").onclick=()=>$("importFile").click();
-$("importFile").onchange=async e=>{
-  const f=e.target.files[0];e.target.value="";if(!f)return;
-  try{const d=normalize(JSON.parse(await f.text()));if(!d)throw 0;S=d;persist();derive();openSettings();toast(`Imported ${S.blocks.length} blocks`)}
-  catch(_){toast("That file isn't a Schedule I.O. backup")}
-};
-document.addEventListener("keydown",e=>{if(e.key!=="Escape")return;if(!$("shade").hidden)closeEditor();else if(!$("setShade").hidden)closeSettings()});
+$("wLoad").onclick=()=>$("importFile").click();
+function parsePacket(d){
+  if(!d||typeof d!=="object")return null;
+  if(d.schedule)return normalize(d.schedule);
+  if(Array.isArray(d))return normalize({blocks:d});
+  return normalize(d);
+}
+const hasSchedule=()=>!!S;
+const packetSummary=d=>`${d.blocks.length} block${d.blocks.length===1?"":"s"} · ${d.cats.length} categor${d.cats.length===1?"y":"ies"}`;
+function applyReplace(d){S=d;persist();boot();toast(`Loaded ${S.blocks.length} blocks`)}
+function applyMerge(d){
+  const map={};
+  d.cats.forEach(c=>{const byId=S.cats.find(x=>x.id===c.id),byName=S.cats.find(x=>x.name.toLowerCase()===c.name.toLowerCase());
+    if(byId)map[c.id]=byId.id;else if(byName)map[c.id]=byName.id;else{S.cats.push({...c});map[c.id]=c.id}});
+  const key=r=>[r.day,r.start,r.end,r.title.toLowerCase()].join("|");const have=new Set(S.blocks.map(key));let n=0;
+  d.blocks.forEach(r=>{const nr={...r,id:newId(),cat:map[r.cat]||r.cat};if(!have.has(key(nr))){S.blocks.push(nr);have.add(key(nr));n++}});
+  commit();return n;
+}
+
+/* ---------- packets: save to Files / load from Files ---------- */
+const PKT_EXT=".scheduleio";
+const localDate=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
+function safeName(t){return (t||"My Week").replace(/[\\/:*?"<>|]+/g,"").trim()||"My Week"}
+async function deliverPacket(obj,name){
+  const file=new File([JSON.stringify(obj)],name,{type:"application/octet-stream"});
+  try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file]});toast("Packet ready");return}}catch(err){if(err&&err.name==="AbortError")return}
+  const a=document.createElement("a");a.href=URL.createObjectURL(file);a.download=name;document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500);toast("Packet saved to your Downloads");
+}
+let pending=null;
+async function handleFile(f){
+  if(!f)return;
+  if(f.size>3e6){toast("That file is too large to be a schedule packet");return}
+  let d=null;try{d=parsePacket(JSON.parse(await f.text()))}catch(_){d=null}
+  if(!d){toast("That file isn't a schedule packet");return}
+  pending=d;
+  $("impName").textContent=f.name.replace(/\.(scheduleio|json)$/i,"");
+  $("impSummary").textContent=packetSummary(d);
+  const fresh=!hasSchedule();
+  $("impMerge").hidden=fresh;$("impNote").hidden=fresh;
+  $("impReplace").textContent=fresh?"Load this schedule":"Replace my schedule";
+  document.querySelectorAll(".shade").forEach(s=>{if(s.id!=="impShade")s.hidden=true});
+  $("impShade").hidden=false;
+}
+$("impCancel").onclick=()=>{pending=null;$("impShade").hidden=true};
+$("impReplace").onclick=()=>{if(!pending)return;applyReplace(pending);pending=null;$("impShade").hidden=true};
+$("impMerge").onclick=()=>{if(!pending)return;const n=applyMerge(pending);pending=null;$("impShade").hidden=true;toast(n?`Added ${n} block${n>1?"s":""}`:"Nothing new to add")};
+$("importFile").onchange=e=>{const f=e.target.files[0];e.target.value="";handleFile(f)};
+let dragN=0;const hasFiles=e=>e.dataTransfer&&[...(e.dataTransfer.types||[])].includes("Files");
+addEventListener("dragenter",e=>{if(hasFiles(e)){dragN++;$("drop").hidden=false}});
+addEventListener("dragleave",e=>{if(hasFiles(e)&&--dragN<=0){dragN=0;$("drop").hidden=true}});
+addEventListener("dragover",e=>{if(hasFiles(e))e.preventDefault()});
+addEventListener("drop",e=>{if(!hasFiles(e))return;e.preventDefault();dragN=0;$("drop").hidden=true;handleFile(e.dataTransfer.files[0])});
+document.addEventListener("keydown",e=>{if(e.key!=="Escape")return;if(!$("impShade").hidden){pending=null;$("impShade").hidden=true}else if(!$("shade").hidden)closeEditor();else if(!$("setShade").hidden)closeSettings()});
 
 /* ---------- boot ---------- */
 let viewSet=false;

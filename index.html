@@ -125,6 +125,15 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .actions .sp{flex:1}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:999px;font-weight:600;font-size:13px;z-index:30;max-width:calc(100% - 32px)}
 
+
+.drop{position:fixed;inset:0;z-index:40;background:color-mix(in srgb,var(--accent) 14%,transparent);display:flex;align-items:center;justify-content:center;padding:24px;pointer-events:none}
+.drop div{border:3px dashed var(--accent);border-radius:18px;background:var(--surface);color:var(--fg);padding:28px 32px;font-weight:700;font-size:17px;text-align:center;max-width:420px}
+.pkt{display:flex;gap:12px;align-items:center;padding:12px;border-radius:10px;background:var(--bg);border:1px solid var(--line-strong)}
+.pkt .ic{width:40px;height:48px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:flex;align-items:flex-end;justify-content:center;font:700 9px var(--mono);padding-bottom:6px;flex:none}
+.pkt b{display:block;font-size:15px;overflow-wrap:anywhere}
+.pkt span{font-size:13px;color:var(--muted)}
+.stack{display:flex;flex-direction:column;gap:8px}
+.stack .btn{width:100%;padding:11px 14px;font-size:14px}
 @media (prefers-reduced-motion:no-preference){.ev{transition:filter .12s}.ev:hover{filter:brightness(.97) saturate(1.1)}}
 </style>
 </head>
@@ -153,11 +162,11 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
   </section>
 
   <div class="backup">
-    <span class="label">Backup &amp; move between devices</span>
-    <button class="btn small" id="exportBtn" type="button">Export backup</button>
-    <button class="btn small" id="importBtn" type="button">Import backup</button>
+    <span class="label">Schedule packet: back up or move to another device</span>
+    <button class="btn small" id="exportBtn" type="button">Save packet</button>
+    <button class="btn small" id="importBtn" type="button">Load packet</button>
     <button class="btn small danger" id="resetBtn" type="button">Reset to original</button>
-    <input type="file" id="importFile" accept=".json,application/json" hidden>
+    <input type="file" id="importFile" hidden>
   </div>
 </div>
 
@@ -180,6 +189,20 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
     </div>
   </form>
 </div>
+
+<div class="shade" id="impShade" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="impHead">
+    <h3 id="impHead">Load packet</h3>
+    <div class="pkt"><div class="ic">PKT</div><div><b id="impName"></b><span id="impSummary"></span></div></div>
+    <div class="stack">
+      <button type="button" class="btn primary" id="impReplace">Replace my schedule</button>
+      <button type="button" class="btn" id="impMerge">Add to my schedule</button>
+      <button type="button" class="btn" id="impCancel">Cancel</button>
+    </div>
+    <p class="hint" id="impNote" style="margin:0;font-size:12.5px;color:var(--muted)">Replace swaps your current schedule for this one. Add keeps yours and adds any blocks you don't already have.</p>
+  </div>
+</div>
+<div class="drop" id="drop" hidden><div>Drop your schedule packet to load it</div></div>
 <div class="toast" id="toast" hidden></div>
 
 <script>
@@ -403,25 +426,58 @@ $("agenda").addEventListener("click",e=>{const it=e.target.closest(".item");if(!
   else openEditor(blocks.find(b=>b.id===it.dataset.id))});
 
 /* ---------- backup ---------- */
-$("exportBtn").onclick=async()=>{
-  const json=JSON.stringify({app:"weekly-schedule",version:1,exported:new Date().toISOString(),blocks:raw},null,2);
-  const name=`schedule-backup-${new Date().toISOString().slice(0,10)}.json`;
-  const file=new File([json],name,{type:"application/json"});
-  try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:"Schedule backup"});return}}catch(err){if(err&&err.name==="AbortError")return}
-  const a=document.createElement("a");a.href=URL.createObjectURL(file);a.download=name;document.body.appendChild(a);a.click();
-  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);toast("Backup exported");
-};
+$("exportBtn").onclick=()=>deliverPacket({app:"weekly-schedule",format:1,saved:new Date().toISOString(),schedule:{title:"Weekly Schedule",blocks:raw}},`Weekly Schedule - ${localDate()}${PKT_EXT}`);
 $("importBtn").onclick=()=>$("importFile").click();
-$("importFile").onchange=async e=>{
-  const f=e.target.files[0];e.target.value="";if(!f)return;
-  try{
-    const d=JSON.parse(await f.text());const arr=Array.isArray(d)?d:d.blocks;
-    if(!Array.isArray(arr))throw 0;
-    const good=arr.filter(valid).map(r=>({id:String(r.id||newId()),day:+r.day,start:r.start,end:r.end,title:String(r.title||"Untitled").slice(0,60),cat:CATS[r.cat]?r.cat:"routine"}));
-    if(!good.length)throw 0;
-    raw=good;commit();toast(`Imported ${good.length} blocks`);
-  }catch(_){toast("That file isn't a schedule backup")}
-};
+function parsePacket(d){
+  if(!d||typeof d!=="object")return null;
+  const arr=Array.isArray(d)?d:Array.isArray(d.blocks)?d.blocks:d.schedule&&Array.isArray(d.schedule.blocks)?d.schedule.blocks:null;
+  if(!arr)return null;
+  const good=arr.filter(valid).map(r=>({id:String(r.id||newId()),day:+r.day,start:r.start,end:r.end,title:String(r.title||"Untitled").slice(0,60),cat:CATS[r.cat]?r.cat:"routine"}));
+  return good.length?good:null;
+}
+const hasSchedule=()=>true;
+const packetSummary=d=>`${d.length} block${d.length===1?"":"s"}`;
+function applyReplace(d){raw=d;commit();toast(`Loaded ${d.length} blocks`)}
+function applyMerge(d){
+  const key=r=>[r.day,r.start,r.end,String(r.title).toLowerCase()].join("|");const have=new Set(raw.map(key));let n=0;
+  d.forEach(r=>{if(!have.has(key(r))){raw.push({...r,id:newId()});have.add(key(r));n++}});
+  commit();return n;
+}
+
+/* ---------- packets: save to Files / load from Files ---------- */
+const PKT_EXT=".scheduleio";
+const localDate=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
+function safeName(t){return (t||"My Week").replace(/[\\/:*?"<>|]+/g,"").trim()||"My Week"}
+async function deliverPacket(obj,name){
+  const file=new File([JSON.stringify(obj)],name,{type:"application/octet-stream"});
+  try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file]});toast("Packet ready");return}}catch(err){if(err&&err.name==="AbortError")return}
+  const a=document.createElement("a");a.href=URL.createObjectURL(file);a.download=name;document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500);toast("Packet saved to your Downloads");
+}
+let pending=null;
+async function handleFile(f){
+  if(!f)return;
+  if(f.size>3e6){toast("That file is too large to be a schedule packet");return}
+  let d=null;try{d=parsePacket(JSON.parse(await f.text()))}catch(_){d=null}
+  if(!d){toast("That file isn't a schedule packet");return}
+  pending=d;
+  $("impName").textContent=f.name.replace(/\.(scheduleio|json)$/i,"");
+  $("impSummary").textContent=packetSummary(d);
+  const fresh=!hasSchedule();
+  $("impMerge").hidden=fresh;$("impNote").hidden=fresh;
+  $("impReplace").textContent=fresh?"Load this schedule":"Replace my schedule";
+  document.querySelectorAll(".shade").forEach(s=>{if(s.id!=="impShade")s.hidden=true});
+  $("impShade").hidden=false;
+}
+$("impCancel").onclick=()=>{pending=null;$("impShade").hidden=true};
+$("impReplace").onclick=()=>{if(!pending)return;applyReplace(pending);pending=null;$("impShade").hidden=true};
+$("impMerge").onclick=()=>{if(!pending)return;const n=applyMerge(pending);pending=null;$("impShade").hidden=true;toast(n?`Added ${n} block${n>1?"s":""}`:"Nothing new to add")};
+$("importFile").onchange=e=>{const f=e.target.files[0];e.target.value="";handleFile(f)};
+let dragN=0;const hasFiles=e=>e.dataTransfer&&[...(e.dataTransfer.types||[])].includes("Files");
+addEventListener("dragenter",e=>{if(hasFiles(e)){dragN++;$("drop").hidden=false}});
+addEventListener("dragleave",e=>{if(hasFiles(e)&&--dragN<=0){dragN=0;$("drop").hidden=true}});
+addEventListener("dragover",e=>{if(hasFiles(e))e.preventDefault()});
+addEventListener("drop",e=>{if(!hasFiles(e))return;e.preventDefault();dragN=0;$("drop").hidden=true;handleFile(e.dataTransfer.files[0])});
 $("resetBtn").onclick=()=>{
   const b=$("resetBtn");
   if(!b.dataset.armed){b.dataset.armed="1";b.textContent="Tap again: replaces all changes";setTimeout(()=>{b.dataset.armed="";b.textContent="Reset to original"},4000);return}
