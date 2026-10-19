@@ -438,5 +438,47 @@ let rzT=0;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&$("shade").hidden){const d=new Date();if((d.getDay()+6)%7!==todayIdx||Math.abs(d.getHours()*60+d.getMinutes()-nowMin)>10)location.reload()}});
 if("serviceWorker" in navigator&&/^https?:$/.test(location.protocol)){navigator.serviceWorker.register("sw.js").catch(()=>{})}
 </script>
+
+<!-- install prompt -->
+<style>
+.inst{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:25;width:min(560px,calc(100% - 24px));background:var(--surface);color:var(--fg);border:1px solid var(--line-strong);border-radius:14px;box-shadow:0 12px 34px rgba(0,0,0,.18);padding:14px 14px 14px 16px;display:flex;gap:12px;align-items:center}
+.inst img{width:42px;height:42px;border-radius:10px;flex:none}
+.inst .tx{flex:1;min-width:0;font-size:13.5px;line-height:1.35}
+.inst .tx b{display:block;font-size:14.5px;margin-bottom:2px}
+.inst .tx .k{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:6px;background:var(--bg);border:1px solid var(--line-strong);font-weight:600;white-space:nowrap}
+.inst .bt{display:flex;flex-direction:column;gap:6px;flex:none}
+.inst button{font:600 13px var(--body);padding:8px 12px;border-radius:8px;border:1px solid var(--line-strong);background:var(--surface);color:var(--fg);cursor:pointer}
+.inst button.go{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+@media (max-width:420px){.inst{flex-wrap:wrap}.inst .bt{flex-direction:row;width:100%;justify-content:flex-end}}
+</style>
+<div class="inst" id="inst" hidden role="region" aria-label="Install this app">
+  <img src="icon-192.png" alt="">
+  <div class="tx" id="instTx"></div>
+  <div class="bt"><button type="button" class="go" id="instGo" hidden>Install app</button><button type="button" id="instNo">Not now</button></div>
+</div>
+<script>
+(()=>{
+  const K="install-dismissed-until";
+  const standalone=matchMedia("(display-mode: standalone)").matches||navigator.standalone===true;
+  if(standalone||!/^https?:$/.test(location.protocol))return;
+  try{if(+localStorage.getItem(K)>Date.now())return}catch(_){}
+  const ua=navigator.userAgent, box=document.getElementById("inst"), tx=document.getElementById("instTx"), go=document.getElementById("instGo");
+  const iOS=/iPhone|iPad|iPod/.test(ua)||(/Macintosh/.test(ua)&&navigator.maxTouchPoints>1);
+  const macSafari=!iOS&&/Macintosh/.test(ua)&&/Safari/.test(ua)&&!/Chrome|Chromium|Edg|Firefox/.test(ua);
+  const name=document.querySelector('meta[name="apple-mobile-web-app-title"]')?.content||"this app";
+  const share='<span class="k" aria-label="Share">Share <svg width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 9V1M3 4l3-3 3 3M2 7H1v6h10V7h-1"/></svg></span>';
+  let deferred=null;
+  const show=html=>{tx.innerHTML=html;box.hidden=false};
+  window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferred=e;go.hidden=false;show(`<b>Install ${name}</b>Add it to your device so it opens like an app and works offline.`)});
+  go.onclick=async()=>{if(!deferred)return;deferred.prompt();try{await deferred.userChoice}catch(_){}deferred=null;box.hidden=true};
+  document.getElementById("instNo").onclick=()=>{box.hidden=true;try{localStorage.setItem(K,String(Date.now()+14*864e5))}catch(_){}};
+  window.addEventListener("appinstalled",()=>{box.hidden=true});
+  setTimeout(()=>{
+    if(deferred||!box.hidden)return;
+    if(iOS)show(`<b>Add ${name} to your Home Screen</b>Tap ${share} then <span class="k">Add to Home Screen</span>. It opens full-screen and works offline.`);
+    else if(macSafari)show(`<b>Add ${name} to your Dock</b>In the menu bar choose <span class="k">File</span> then <span class="k">Add to Dock</span>.`);
+  },1500);
+})();
+</script>
 </body>
 </html>
