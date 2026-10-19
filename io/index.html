@@ -157,9 +157,9 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .item.live.flex,.item.live.open{border-color:transparent;box-shadow:inset 0 0 0 2.5px var(--now),0 10px 22px -10px color-mix(in srgb,var(--now) 60%,transparent),0 2px 6px -2px rgba(0,0,0,.18)}
 .item.open.live{background:var(--surface)}
 @media (prefers-reduced-motion:reduce){.item{transition:none}}
-.swatches{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
-.swatches button{width:34px;height:34px;border-radius:50%;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line-strong);background:var(--sw);cursor:pointer;padding:0}
-.swatches button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
+#sNow.swatches{gap:10px;margin-top:6px}
+#sNow.swatches button{width:34px;height:34px;box-shadow:0 0 0 1px var(--line-strong)}
+#sNow.swatches button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
 .item .prog .tk{position:absolute;top:0;width:1px;height:6px;background:color-mix(in srgb,var(--fg) 28%,transparent);transform:translateX(-.5px)}
 .item .prog .tk.hh{height:8px;background:color-mix(in srgb,var(--fg) 40%,transparent)}
 .item .prog .lb.sm{font-weight:400;opacity:.85}
@@ -238,8 +238,13 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .swatches{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .swatches button{width:26px;height:26px;border-radius:50%;border:2px solid var(--surface);background:var(--sw);cursor:pointer;padding:0}
 .swatches button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--fg)}
-.tgl{font:600 12px var(--body);padding:5px 10px;border-radius:999px;border:1px solid var(--line-strong);background:var(--surface);color:var(--muted);cursor:pointer;margin-left:auto}
-.tgl[aria-pressed="true"]{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.ctrack{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:8px;border-top:1px solid color-mix(in srgb,var(--c,var(--line-strong)) 22%,transparent)}
+.ctrack b{font-size:13.5px;font-weight:600}.ctrack span{display:block;font-size:12px;color:var(--muted);font-weight:400}
+.sw{flex:none;position:relative;width:48px;height:28px;border-radius:999px;border:0;padding:0;background:color-mix(in srgb,var(--fg) 18%,transparent);cursor:pointer;transition:background .2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .2s}
+.sw[aria-pressed="true"]{background:var(--ok)}
+.sw[aria-pressed="true"]::after{transform:translateX(20px)}
+@media (prefers-reduced-motion:reduce){.sw,.sw::after{transition:none}}
 .metric{display:grid;grid-template-columns:1fr 110px;gap:10px;align-items:center}
 .metric label{font-weight:600}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:999px;font-weight:600;font-size:13px;z-index:50;max-width:calc(100% - 32px)}
@@ -1373,7 +1378,7 @@ const hourLabel=h=>h===24?"12 AM (midnight)":fmt(h*60);
 function renderCats(){
   const used={};liveBlocks().forEach(b=>used[b.cat]=(used[b.cat]||0)+1);
   $("catList").innerHTML=S.cats.map(c=>`<div class="crow" data-id="${esc(c.id)}" style="${cvC(c)}"><div class="top"><input class="row-in" value="${esc(c.name)}" maxlength="30" aria-label="Category name" data-role="name"><button type="button" class="btn small danger" data-role="del">${used[c.id]?"Delete ("+used[c.id]+")":"Delete"}</button></div>
-    <div class="swatches">${PALETTE.map(p=>`<button type="button" data-role="color" data-c="${p}" aria-label="${p}" aria-pressed="${c.color===p}" style="--sw:var(--p-${p})"></button>`).join("")}<button type="button" class="tgl" data-role="track" aria-pressed="${c.track}">Check-ins ${c.track?"on":"off"}</button></div></div>`).join("");
+    <div class="swatches">${PALETTE.map(p=>`<button type="button" data-role="color" data-c="${p}" aria-label="${p}" aria-pressed="${c.color===p}" style="--sw:var(--p-${p})"></button>`).join("")}</div><div class="ctrack"><div><b>Check-ins</b><span>${c.track?"On · counts toward your check-in rate":"Off · time counts as it passes"}</span></div><button type="button" class="sw" data-role="track" role="switch" aria-pressed="${c.track}" aria-checked="${c.track}" aria-label="Check-ins for ${esc(c.name)}"></button></div></div>`).join("");
 }
 function renderMetrics(){
   $("metricList").innerHTML=S.metrics.length?S.metrics.map(mt=>`<div class="crow" data-id="${esc(mt.id)}"><div class="top"><input class="row-in" value="${esc(mt.name)}" maxlength="30" aria-label="Metric name" data-role="mname"><button type="button" class="btn small danger" data-role="mdel">Delete</button></div>
