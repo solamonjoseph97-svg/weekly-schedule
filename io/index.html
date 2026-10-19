@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Schedule I.O.</title>
 <meta name="description" content="Plan your week. See every hour. Share with friends, track your team. Free, offline, no account.">
@@ -214,6 +215,16 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .stack{display:flex;flex-direction:column;gap:8px}
 .stack .btn{width:100%;padding:11px 14px;font-size:14px}
 .note{font-size:12.5px;color:var(--muted);margin:0}
+.syncsec{display:flex;flex-direction:column;gap:10px}.syncsec[hidden]{display:none}
+#syncBox{display:flex;flex-direction:column;gap:10px}
+#syncBox .row{display:flex;flex-wrap:wrap;gap:8px}
+.gbtn{display:inline-flex;align-items:center;justify-content:center;gap:10px;align-self:flex-start;font:600 14px var(--body);padding:10px 16px;border-radius:999px;border:1px solid #dadce0;background:#fff;color:#1f1f1f;cursor:pointer}
+.gbtn:active{transform:scale(.97)}
+.syncstat{display:flex;flex-direction:column;gap:2px;background:var(--bg);border-radius:10px;padding:10px 12px}
+.syncstat b{font-size:14px;overflow-wrap:anywhere}.syncstat span{font-size:12.5px;color:var(--muted)}
+.wsync{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:14px;margin-top:4px}.wsync[hidden]{display:none}
+.syncmore summary{font-size:13px;color:var(--muted);cursor:pointer;padding:4px 0}
+.syncmore[open]{display:flex;flex-direction:column;gap:8px}
 .rowlist{display:flex;flex-direction:column;gap:10px}
 .crow{display:flex;flex-direction:column;gap:8px;padding:10px;border-radius:10px;background:var(--c-bg,var(--bg));box-shadow:inset 4px 0 0 var(--c,var(--line-strong))}
 .crow .top{display:flex;gap:8px;align-items:center}
@@ -464,7 +475,7 @@ body{overflow:hidden;overscroll-behavior:none}
     <div class="stripes" id="stripes"></div>
     <div class="brand">Schedule I.O.</div>
     <h2 class="big">Plan your week. See every hour.</h2>
-    <p>A color-coded schedule that shows where your time goes, where it's free, and how your week actually went. Free, works offline, no account. Your schedule stays on this device.</p>
+    <p>A color-coded schedule that shows where your time goes, where it's free, and how your week actually went. Free and works offline. Your schedule stays on this device unless you turn on sync.</p>
     <div class="banner" id="wInvite" hidden></div>
     <label class="field">Your name<input id="wName" maxlength="40" placeholder="e.g. Jordan" autocomplete="given-name"></label>
     <div class="pair">
@@ -478,6 +489,7 @@ body{overflow:hidden;overscroll-behavior:none}
     </div>
     <button type="button" class="btn primary" id="wCoach" style="align-self:flex-start">New to scheduling? Let the coach walk you through it</button>
     <button type="button" class="btn" id="rcvWelcome" style="align-self:flex-start">Got a schedule from someone? Add Packet ▾</button>
+    <div class="wsync" id="wSync" hidden></div>
   </div>
 </div>
 
@@ -596,6 +608,7 @@ body{overflow:hidden;overscroll-behavior:none}
     <div class="field">Current block highlight (day view)<div class="swatches" id="sNow" role="group" aria-label="Current block highlight color"></div></div>
     <label class="field">Your mobile number (optional)<input id="sPhone" type="tel" inputmode="tel" maxlength="24" autocomplete="tel" placeholder="So people can text you back"></label>
     <p class="note" style="margin-top:-6px">Included when you send your schedule, so replies come straight back to you.</p>
+    <div class="syncsec" hidden><h4>Sync across devices</h4><div id="syncBox"></div></div>
     <h4>Categories</h4>
     <p class="note">Check-ins on means blocks in that category ask you to check in and count toward your completion rate.</p>
     <div class="rowlist" id="catList"></div>
@@ -851,7 +864,7 @@ function normalize(d){
   const ws=d.weekStart===0||d.weekStart==="0"?0:1;
   return {v:2,ownerId:String(d.ownerId||newId("u")),name:String(d.name||"").slice(0,40),title:String(d.title||"").slice(0,40),weekStart:ws,
     startDate:isISO(d.startDate)?d.startDate:iso(weekStartOf(new Date(),ws)),tz:String(d.tz||tzId()),dayStart:ds,dayEnd:de,cats,metrics,blocks,checkins,
-    phone:String(d.phone||"").slice(0,24),buffer:[10,15,20,30].includes(+d.buffer)?+d.buffer:15,
+    mtime:+d.mtime||0,phone:String(d.phone||"").slice(0,24),buffer:[10,15,20,30].includes(+d.buffer)?+d.buffer:15,
     archives:Array.isArray(d.archives)?d.archives.filter(a=>a&&Array.isArray(a.blocks)).slice(-12).map(a=>({id:String(a.id||newId("a")),name:String(a.name||"Saved schedule").slice(0,60),date:isISO(a.date)?a.date:iso(new Date()),blocks:a.blocks,cats:Array.isArray(a.cats)?a.cats:[]})):[],sendTo:Array.isArray(d.sendTo)?d.sendTo.map(String).slice(0,50):[],
     team:d.team&&typeof d.team==="object"&&d.team.id?{id:String(d.team.id),name:String(d.team.name||"Team").slice(0,40),cadence:normCad(d.team.cadence),leaderId:String(d.team.leaderId||""),leaderName:String(d.team.leaderName||"").slice(0,40),leaderPhone:String(d.team.leaderPhone||"").slice(0,24),expectedHours:Math.max(0,+d.team.expectedHours||0)}:null};
 }
@@ -860,8 +873,8 @@ function load(){
   let d=null;try{const s=localStorage.getItem(KEY);if(s)d=normalize(JSON.parse(s))}catch(_){}S=d;
   try{const p=JSON.parse(localStorage.getItem(PKEY)||"[]");P=Array.isArray(p)?p.map(x=>({...x,schedule:normalize(x.schedule)})).filter(x=>x.schedule):[]}catch(_){P=[]}
 }
-function persist(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(_){toast("Couldn't save on this device")}}
-function persistP(){try{localStorage.setItem(PKEY,JSON.stringify(P))}catch(_){toast("Couldn't save people on this device")}}
+function persist(){if(S&&!applying)S.mtime=Date.now();try{localStorage.setItem(KEY,JSON.stringify(S))}catch(_){toast("Couldn't save on this device")}markDirty()}
+function persistP(){try{localStorage.setItem(PKEY,JSON.stringify(P))}catch(_){toast("Couldn't save people on this device")}markDirty()}
 function commit(){persist();renderAll()}
 window.addEventListener("storage",e=>{if(e.key===KEY||e.key===PKEY){load();boot()}});
 
@@ -1370,7 +1383,7 @@ function openSettings(){
   $("sStart").innerHTML=Array.from({length:13},(_,h)=>`<option value="${h}">${hourLabel(h)}</option>`).join("");
   $("sEnd").innerHTML=Array.from({length:13},(_,i)=>i+12).map(h=>`<option value="${h}">${hourLabel(h)}</option>`).join("");
   $("sStart").value=S.dayStart;$("sEnd").value=S.dayEnd;$("sTz").textContent="Time zone: "+tzLong()+(tzId()?" ("+tzId()+")":"")+", from this device";
-  $("sPhone").value=S.phone||"";renderTeamSettings();renderArchives();renderNowSw();
+  $("sPhone").value=S.phone||"";renderSyncUI();renderTeamSettings();renderArchives();renderNowSw();
   renderCats();renderMetrics();$("setShade").hidden=false;
 }
 function closeSettings(){$("setShade").hidden=true;commit();if(!$("drawer").hidden)renderPeople()}
@@ -1404,7 +1417,7 @@ $("metricList").addEventListener("click",e=>{
 $("metricAdd").onclick=()=>{S.metrics.push({id:newId("m"),name:"New metric",cats:S.cats.filter(c=>c.track).map(c=>c.id)});renderMetrics();const ins=$("metricList").querySelectorAll('[data-role="mname"]');const l=ins[ins.length-1];l.focus();l.select()};
 function armed(btn,label,armedLabel,fn){if(!btn.dataset.armed){btn.dataset.armed="1";btn.textContent=armedLabel;setTimeout(()=>{btn.dataset.armed="";btn.textContent=label},4000);return}btn.dataset.armed="";btn.textContent=label;fn()}
 $("clearBtn").onclick=e=>armed(e.target,"Clear all blocks","Tap again: removes every block",()=>{S.blocks=[];S.checkins={};renderCats();toast("All blocks cleared")});
-$("eraseBtn").onclick=e=>armed(e.target,"Erase everything","Tap again: erases all data",()=>{try{[KEY,KEY+".view",PKEY].forEach(k=>localStorage.removeItem(k))}catch(_){}S=null;P=[];viewing=null;compare.clear();$("setShade").hidden=true;closeDrawer();boot()});
+$("eraseBtn").onclick=e=>armed(e.target,"Erase everything","Tap again: erases all data",()=>{try{[KEY,KEY+".view",PKEY,KEY+".sync"].forEach(k=>localStorage.removeItem(k))}catch(_){}S=null;P=[];SY={};viewing=null;compare.clear();$("setShade").hidden=true;closeDrawer();boot()});
 
 /* ============ packets ============ */
 const PKT_EXT=".scheduleio";
@@ -2121,7 +2134,144 @@ function boot(){
   if(!booted){booted=true;let v=null;try{v=localStorage.getItem(KEY+".view")}catch(_){}setView(v||(window.innerWidth<760?"day":"week"));setLand();return}
   renderAll();setLand();
 }
+/* ============ cloud sync: Google sign-in, automatic background sync ============ */
+// Server: sync-worker/worker.js. Schedules are encrypted at rest there. Device-only settings (view, highlight color) never sync.
+const SYNC_URL="";
+const SKEY=KEY+".sync";
+let SY={};try{SY=JSON.parse(localStorage.getItem(SKEY)||"{}")||{}}catch(_){SY={}}
+const saveSY=()=>{try{localStorage.setItem(SKEY,JSON.stringify(SY))}catch(_){}};
+const syncOn=()=>!!(SYNC_URL&&SY.session);
+let applying=false,syncing=false,editSeq=0,pushT=0,claimT=0;
+function markDirty(){if(applying||!syncOn())return;editSeq++;SY.dirty=true;saveSY();clearTimeout(pushT);pushT=setTimeout(()=>syncNow(),4000)}
+const sheetsOpen=()=>[...document.querySelectorAll(".shade")].some(s=>!s.hidden);
+const localDoc=()=>({S,P});
+const hasData=d=>!!(d&&d.S&&((d.S.blocks||[]).length||Object.keys(d.S.checkins||{}).length));
+const idsOf=d=>({blocks:(d?.S?.blocks||[]).map(x=>x.id),cats:(d?.S?.cats||[]).map(x=>x.id),metrics:(d?.S?.metrics||[]).map(x=>x.id),archives:(d?.S?.archives||[]).map(x=>x.id),people:(d?.P||[]).map(x=>x.id),checkins:Object.keys(d?.S?.checkins||{})});
+/* three-way merge on membership: an item on one side only is kept if it's new since the last sync, dropped if the other side deleted it.
+   Items on both sides come from whichever device saved last. */
+function mergeList(L,R,base,localNewer){
+  const bs=new Set(base||[]),lm=new Map(L.map(x=>[x.id,x])),rm=new Map(R.map(x=>[x.id,x])),out=[],seen=new Set();
+  const [A,B]=localNewer?[L,R]:[R,L];
+  for(const x of A){seen.add(x.id);if(lm.has(x.id)&&rm.has(x.id))out.push(localNewer?lm.get(x.id):rm.get(x.id));else if(!bs.has(x.id))out.push(x)}
+  for(const x of B){if(!seen.has(x.id)&&!bs.has(x.id))out.push(x)}
+  return out;
+}
+function merge3(loc,rem,base){
+  if(!hasData(rem))return loc;if(!loc||!loc.S)return rem;
+  const ln=(+loc.S.mtime||0)>=(+rem.S.mtime||0),nw=ln?loc.S:rem.S,b=base||{};
+  const ci=k=>Object.entries(k||{}).map(([id,v])=>({id,v}));
+  const S2={...nw,blocks:mergeList(loc.S.blocks||[],rem.S.blocks||[],b.blocks,ln),cats:mergeList(loc.S.cats||[],rem.S.cats||[],b.cats,ln),
+    metrics:mergeList(loc.S.metrics||[],rem.S.metrics||[],b.metrics,ln),archives:mergeList(loc.S.archives||[],rem.S.archives||[],b.archives,ln),
+    checkins:Object.fromEntries(mergeList(ci(loc.S.checkins),ci(rem.S.checkins),b.checkins,ln).map(x=>[x.id,x.v])),mtime:Math.max(+loc.S.mtime||0,+rem.S.mtime||0)};
+  return {S:S2,P:mergeList(loc.P||[],rem.P||[],b.people,ln)};
+}
+function applyDoc(d){
+  const wasEmpty=!S;applying=true;
+  try{const s=normalize(d.S);if(s){S=s;S.mtime=+d.S.mtime||0}
+    P=Array.isArray(d.P)?d.P.map(x=>({...x,schedule:normalize(x.schedule)})).filter(x=>x.schedule):P;
+    persist();persistP()}finally{applying=false}
+  if(wasEmpty||$("app").hidden)boot();else{renderAll();if(!$("drawer").hidden)renderPeople()}
+}
+async function api(method,path,body){
+  const r=await fetch(SYNC_URL+path,{method,headers:{authorization:"Bearer "+SY.session,...(body?{"content-type":"application/json"}:{})},body:body?JSON.stringify(body):undefined,cache:"no-store"});
+  const j=await r.json().catch(()=>({}));if(!r.ok&&r.status!==409){const e=new Error(j.error||"sync failed");e.status=r.status;throw e}
+  return {...j,status:r.status};
+}
+async function syncNow(manual){
+  if(!syncOn()||syncing)return;
+  if(sheetsOpen()&&!manual){clearTimeout(pushT);pushT=setTimeout(()=>syncNow(),5000);return} // never swap data under an open editor
+  syncing=true;renderSyncUI();const seq=editSeq;let pulled=false;
+  try{
+    for(let attempt=0;attempt<4;attempt++){
+      const g=await api("GET","/data");
+      if(g.rev===SY.rev&&!SY.dirty&&SY.rev)break; // never-synced devices always run once
+      let next;
+      if(!g.doc||!hasData(g.doc))next=localDoc();
+      else if(!SY.rev&&hasData(localDoc())){const c=await askFirstSync(g.doc);if(c==="cancel"){signOutLocal();return}
+        next=c==="account"?g.doc:c==="device"?localDoc():merge3(localDoc(),g.doc,{})}
+      else if(g.rev===SY.rev)next=localDoc();
+      else if(!SY.dirty||!S)next=g.doc;
+      else next=merge3(localDoc(),g.doc,SY.base);
+      if(JSON.stringify(next)!==JSON.stringify(localDoc())){applyDoc(next);pulled=true}
+      if(g.doc&&JSON.stringify(next)===JSON.stringify(g.doc)){SY.rev=g.rev;SY.base=idsOf(next);break}
+      if(!S){if(manual)toast("Signed in. Set up your schedule and it will sync.");break}
+      const p=await api("PUT","/data",{baseRev:g.rev||0,doc:localDoc()});
+      if(p.status===409)continue;
+      SY.rev=p.rev;SY.base=idsOf(localDoc());break;
+    }
+    SY.dirty=editSeq!==seq;SY.last=Date.now();SY.err="";saveSY();
+    if(pulled&&!manual)toast("Updated from your other device");else if(manual)toast("Synced");
+    if(SY.dirty){clearTimeout(pushT);pushT=setTimeout(()=>syncNow(),2000)}
+  }catch(e){
+    if(e.status===401){SY={};saveSY();toast("Sync signed out. Sign in again in Settings.")}
+    else{SY.err=navigator.onLine?"Couldn't reach sync. Will retry.":"Offline. Changes will sync when you're back online.";saveSY()}
+  }finally{syncing=false;renderSyncUI()}
+}
+/* first sign-in on a device that already has a schedule and an account that already has one */
+function askFirstSync(remote){
+  return new Promise(res=>{
+    const sh=$("syncShade"),nb=d=>(d.S.blocks||[]).length;
+    $("syncAsk").innerHTML=`<h3>Which schedule should we keep?</h3><p class="note">Your Google account already has a schedule (${nb(remote)} blocks${remote.S.name?`, ${esc(remote.S.name)}`:""}). This device has its own (${nb(localDoc())} blocks).</p>
+      <div class="radio"><button type="button" data-c="account"><b>Use my account's schedule</b><span>This device switches to the synced schedule.</span></button>
+      <button type="button" data-c="device"><b>Use this device's schedule</b><span>Your other devices switch to this one.</span></button>
+      <button type="button" data-c="both"><b>Combine both</b><span>Keeps every block from both. You may see duplicates to tidy up.</span></button></div>
+      <button type="button" class="btn" data-c="cancel">Cancel and sign out</button>`;
+    sh.hidden=false;
+    sh.onclick=e=>{const b=e.target.closest("button[data-c]");if(!b)return;sh.hidden=true;sh.onclick=null;res(b.dataset.c)};
+  });
+}
+/* sign-in: open Google in a separate window; the app picks up the session by polling (works from iPhone home-screen apps too) */
+const rnd=n=>btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(n)))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+function startSignIn(){
+  const st=rnd(24);SY={pending:{st,at:Date.now()}};saveSY();
+  const w=window.open(SYNC_URL+"/auth/start?state="+encodeURIComponent(st),"sio-google");
+  if(!w){location.href=SYNC_URL+"/auth/start?state="+encodeURIComponent(st);return}
+  renderSyncUI();pollClaim();
+}
+async function pollClaim(){
+  clearTimeout(claimT);const pd=SY.pending;if(!SYNC_URL||!pd)return;
+  if(Date.now()-pd.at>10*60*1000){SY={};saveSY();renderSyncUI();return}
+  try{const r=await fetch(SYNC_URL+"/auth/claim?state="+encodeURIComponent(pd.st),{cache:"no-store"});
+    const j=r.status===200?await r.json().catch(()=>({})):{};if(j.session){let email="";try{email=JSON.parse(atob(j.session.split(".")[0].replace(/-/g,"+").replace(/_/g,"/"))).email||""}catch(_){}
+      SY={session:j.session,email,rev:0,base:{},dirty:false};saveSY();renderSyncUI();toast(email?`Signed in as ${email}`:"Signed in");syncNow(true);return}}catch(_){}
+  claimT=setTimeout(pollClaim,2000);
+}
+function signOutLocal(){clearTimeout(pushT);SY={};saveSY();renderSyncUI()}
+addEventListener("message",e=>{if(SYNC_URL&&e.origin===new URL(SYNC_URL).origin&&e.data&&e.data.sioSignedIn&&SY.pending)pollClaim()});
+function agoShort(t){if(!t)return "not yet";const s=(Date.now()-t)/1000;return s<60?"just now":s<3600?Math.floor(s/60)+" min ago":s<86400?Math.floor(s/3600)+" h ago":Math.floor(s/86400)+" d ago"}
+const GLOGO=`<svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.8c4.3-4 6.9-9.9 6.9-17.2z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.6 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.8c-2.1 1.4-4.8 2.3-8.5 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>`;
+function renderWelcomeSync(){const w=$("wSync");if(!w)return;w.hidden=!SYNC_URL||!!SY.session;if(w.hidden)return;
+  w.innerHTML=SY.pending?`<p class="note">Finish signing in with Google, then come back here. This updates on its own.</p><button type="button" class="btn small" id="wSyncCancel">Cancel</button>`
+    :`<p class="note"><b>Already use Schedule I.O. on another device?</b> Sign in to bring your schedule here.</p><button type="button" class="gbtn" id="wSyncIn">${GLOGO}<span>Sign in with Google</span></button>`}
+function renderSyncUI(){
+  renderWelcomeSync();
+  const box=$("syncBox");if(!box)return;
+  if(!SYNC_URL){box.closest(".syncsec").hidden=true;return}
+  box.closest(".syncsec").hidden=false;
+  if(SY.pending&&!SY.session){box.innerHTML=`<p class="note">Finish signing in with Google, then come back here. This updates on its own.</p><button type="button" class="btn small" id="syncCancel">Cancel</button>`;return}
+  if(!SY.session){box.innerHTML=`<p class="note">Keep this schedule the same on your phone, tablet and computer. It's encrypted on our server and only your Google account can open it.</p><button type="button" class="gbtn" id="syncIn">${GLOGO}<span>Sign in with Google</span></button>`;return}
+  box.innerHTML=`<div class="syncstat"><b>${esc(SY.email||"Signed in")}</b><span>${syncing?"Syncing…":SY.err?esc(SY.err):"Synced "+agoShort(SY.last)}</span></div>
+    <div class="row"><button type="button" class="btn small" id="syncGo">Sync now</button><button type="button" class="btn small" id="syncOut">Sign out</button></div>
+    <details class="syncmore"><summary>Security options</summary><div class="row"><button type="button" class="btn small" id="syncOutAll">Sign out of all devices</button><button type="button" class="btn small danger" id="syncDel">Delete my cloud data</button></div>
+    <p class="note">Signing out keeps your schedule on this device. Deleting removes it from the server and signs out every device; each device keeps its own copy.</p></details>`;
+}
+$("wSync").addEventListener("click",e=>{const id=e.target.closest("button")?.id;if(id==="wSyncIn")startSignIn();else if(id==="wSyncCancel")signOutLocal()});
+$("setShade").addEventListener("click",async e=>{
+  const id=e.target.closest("button")?.id;if(!id)return;
+  if(id==="syncIn")startSignIn();
+  else if(id==="syncCancel")signOutLocal();
+  else if(id==="syncGo")syncNow(true);
+  else if(id==="syncOut"){signOutLocal();toast("Signed out of sync on this device")}
+  else if(id==="syncOutAll")armed(e.target.closest("button"),"Sign out of all devices","Tap again to confirm",async()=>{try{await api("POST","/auth/signout-all")}catch(_){}signOutLocal();toast("Signed out everywhere")});
+  else if(id==="syncDel")armed(e.target.closest("button"),"Delete my cloud data","Tap again: deletes it from the server",async()=>{try{await api("DELETE","/data");signOutLocal();toast("Cloud data deleted")}catch(_){toast("Couldn't reach the server. Try again.")}});
+});
+setInterval(()=>{if(syncOn()&&document.visibilityState==="visible")syncNow()},120000);
+setInterval(()=>{if(!$("setShade").hidden&&syncOn()&&!syncing)renderSyncUI()},30000);
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState!=="visible")return;if(SY.pending)pollClaim();else if(syncOn())syncNow()});
+addEventListener("online",()=>{if(syncOn())syncNow()});
+
 load();boot();route();
+renderSyncUI();if(SY.pending)pollClaim();else if(syncOn())syncNow();
 let rzT=0;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{if(S&&view==="week"){fit();if(glance)applyGlance(false)}},150)});
 setInterval(()=>{if(S&&document.visibilityState==="visible"&&$("shade").hidden&&$("ciShade").hidden&&$("setShade").hidden&&$("impShade").hidden){const t=new Date();if(t.getMinutes()!==nowMin%60)renderAll()}},60000);
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&S&&$("shade").hidden&&$("ciShade").hidden&&$("setShade").hidden)renderAll()});
@@ -2180,5 +2330,6 @@ if("serviceWorker" in navigator&&/^https?:$/.test(location.protocol)){
   },1500);
 })();
 </script>
+<div class="shade" id="syncShade" hidden><div class="sheet" role="dialog" aria-modal="true" id="syncAsk"></div></div>
 </body>
 </html>
