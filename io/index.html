@@ -229,6 +229,9 @@ h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,4vw,40px);let
 .bkbox .row{display:flex;flex-wrap:wrap;gap:8px}
 .bkbar{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:17;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px -12px rgba(0,0,0,.35);padding:10px 12px;font-size:13.5px;font-weight:600;width:max-content;max-width:calc(100vw - 24px)}
 .bkbar[hidden]{display:none}
+#mvBar{bottom:max(14px,env(safe-area-inset-bottom,0px))}
+#bkBar:not([hidden])~#mvBar{bottom:calc(max(14px,env(safe-area-inset-bottom,0px)) + 64px)}
+#mvBar b{font-weight:700}#mvBar .x{background:none;border:0;color:var(--muted);font-size:20px;line-height:1;padding:4px 6px;cursor:pointer}
 .syncmore summary{font-size:13px;color:var(--muted);cursor:pointer;padding:4px 0}
 .syncmore[open]{display:flex;flex-direction:column;gap:8px}
 .rowlist{display:flex;flex-direction:column;gap:10px}
@@ -538,6 +541,7 @@ body{overflow:hidden;overscroll-behavior:none}
   <div class="sumshade" id="sumShade" hidden></div>
   <div class="sumpanel" id="sumPanel" role="dialog" aria-label="Time summary" hidden></div>
   <div class="bkbar" id="bkBar" hidden role="status"><span>Save today's backup file?</span><button type="button" class="btn small primary" id="bkGo">Save backup</button><button type="button" class="btn small" id="bkLater">Later</button></div>
+  <div class="bkbar" id="mvBar" hidden role="status"><span><b>Schedule I.O. is now Hourline</b></span><button type="button" class="btn small primary" id="mvOpen">Move my schedule</button><button type="button" class="x" id="mvX" aria-label="Hide for now">×</button></div>
 
   <section id="weekView" class="board" aria-label="Week view"><div class="zoom" id="zoom"><div class="grid" id="grid"></div></div></section>
   <section id="dayView" hidden aria-label="Day view">
@@ -772,6 +776,14 @@ body{overflow:hidden;overscroll-behavior:none}
   </div>
 </div>
 <!-- SAFARI HANDOFF -->
+<div class="shade" id="mvShade" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="mvHead">
+    <h3 id="mvHead">We're now Hourline</h3>
+    <p class="note" style="font-size:14px;color:var(--fg)">Same app, new name and home: <b>hourline.io</b>. This link keeps working for now, but new features land on Hourline.</p>
+    <div id="mvBody"></div>
+    <button type="button" class="btn" id="mvClose">Not now</button>
+  </div>
+</div>
 <div class="shade" id="hoShade" hidden>
   <div class="sheet" role="dialog" aria-labelledby="hoHead">
     <h3 id="hoHead">Open in your app</h3>
@@ -2334,7 +2346,24 @@ $("bkBox").addEventListener("change",async e=>{if(e.target.id!=="bkOn")return;BK
 $("bkBox").addEventListener("click",async e=>{const id=e.target.closest("button")?.id;if(id==="bkNow")backupNow(true);else if(id==="bkFile"){try{await bkPick()}catch(_){}}});
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")setTimeout(dailyBackup,1500)});
 
-load();boot();route();
+// Move to Hourline: carry this device's schedule and people to hourline.io in a link (never sent to a server; the part after # stays in the browser).
+const MV_URL="https://hourline.io/app/",MVKEY=KEY+".moveHide";
+function renderMoveBar(){let h=0;try{h=+localStorage.getItem(MVKEY)||0}catch(_){}$("mvBar").hidden=!S||Date.now()<h}
+async function moveLink(){return MV_URL+"#m="+await pack({app:"schedule-io",format:2,move:1,S,P})}
+function openMove(){
+  const iosApp=isIOS&&isStandalone(),b=$("mvBody");
+  if(syncOn()){b.innerHTML=`<p class="note" style="font-size:14px;color:var(--fg)">Your schedule is synced. Open Hourline${iosApp?" in Safari, tap <b>Share → Add to Home Screen</b>, open it,":""} and sign in with the same Google account. Everything comes with you.</p><div class="stack"><button type="button" class="btn primary" id="mvGo">Open Hourline</button></div>`;
+    $("mvGo").onclick=async()=>{try{await syncNow()}catch(_){}openUrl(MV_URL,!iosApp)}}
+  else if(iosApp){b.innerHTML=`<ol class="note" style="font-size:14px;color:var(--fg);margin:0 0 4px;padding-left:20px;display:flex;flex-direction:column;gap:4px"><li>Turn on <b>Sync across devices</b> here (Sign in with Google)</li><li>Open <b>hourline.io</b> in Safari, tap <b>Share → Add to Home Screen</b></li><li>Open Hourline and sign in with the same Google account</li></ol><div class="stack"><button type="button" class="btn primary" id="mvSync">Turn on sync</button><button type="button" class="btn" id="mvCopy">Copy hourline.io</button></div>`;
+    $("mvSync").onclick=()=>{$("mvShade").hidden=true;openSettings();setTimeout(()=>{const x=document.querySelector(".syncsec");x&&x.scrollIntoView({block:"center"})},150)};
+    $("mvCopy").onclick=async()=>{try{await navigator.clipboard.writeText("https://hourline.io");toast("Copied. Paste it into Safari.")}catch(_){toast("Open Safari and go to hourline.io")}}}
+  else{b.innerHTML=`<p class="note" style="font-size:14px;color:var(--fg)">Tap below and Hourline opens with your schedule, check-ins and people already in it.</p><div class="stack"><button type="button" class="btn primary" id="mvGo">Move my schedule</button></div>`;
+    $("mvGo").onclick=async()=>{const u=await moveLink();location.href=u}}
+  document.querySelectorAll(".shade").forEach(x=>{if(x.id!=="mvShade")x.hidden=true});$("mvShade").hidden=false;
+}
+$("mvOpen").onclick=openMove;$("mvClose").onclick=()=>{$("mvShade").hidden=true};
+$("mvX").onclick=()=>{try{localStorage.setItem(MVKEY,String(Date.now()+3*864e5))}catch(_){}renderMoveBar()};
+load();boot();route();renderMoveBar();
 renderSyncUI();if(SY.pending)pollClaim();else if(syncOn())syncNow();
 setTimeout(dailyBackup,2500);
 let rzT=0;window.addEventListener("resize",()=>{clearTimeout(rzT);rzT=setTimeout(()=>{if(S&&view==="week"){fit();if(glance)applyGlance(false)}},150)});

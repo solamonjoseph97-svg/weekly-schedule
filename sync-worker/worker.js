@@ -1,4 +1,4 @@
-// Schedule I.O. sync service — Cloudflare Worker + D1.
+// Hourline sync service — Cloudflare Worker + D1.
 //
 // Security model
 // - Identity: Google sign-in (OpenID Connect id_token, RS256, verified against Google's keys; audience, issuer,
@@ -117,20 +117,20 @@ export default {
       if (path === "/auth/start" && req.method === "GET") {
         if (limited(req, 30)) return page("Slow down", "<h1>Too many attempts</h1><p>Wait a minute and try again.</p>", 429);
         const state = url.searchParams.get("state");
-        if (!validState(state)) return page("Sign-in error", "<h1>Something went wrong</h1><p>Go back to Schedule I.O. and try again.</p>", 400);
+        if (!validState(state)) return page("Sign-in error", "<h1>Something went wrong</h1><p>Go back to Hourline and try again.</p>", 400);
         const q = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: url.origin + "/auth/callback", response_type: "id_token", response_mode: "form_post", scope: "openid email", nonce: state, state, prompt: "select_account" });
         return new Response(null, { status: 302, headers: { location: (env.GOOGLE_AUTH_URL || GOOGLE_AUTH) + "?" + q, ...SEC } });
       }
       if (path === "/auth/callback" && req.method === "POST") {
         if (limited(req, 30)) return page("Slow down", "<h1>Too many attempts</h1><p>Wait a minute and try again.</p>", 429);
         const f = await req.formData(), state = f.get("state");
-        if (f.get("error") || !validState(state)) return page("Sign-in cancelled", "<h1>Sign-in cancelled</h1><p>You can close this and return to Schedule I.O.</p>", 400);
+        if (f.get("error") || !validState(state)) return page("Sign-in cancelled", "<h1>Sign-in cancelled</h1><p>You can close this and return to Hourline.</p>", 400);
         const c = await verifyIdToken(env, f.get("id_token"), state);
         const session = await makeSession(env, c.sub, c.email || "", await accountVer(env, c.sub));
         await env.DB.prepare("DELETE FROM logins WHERE created < ?").bind(Date.now() - LOGIN_TTL_MS).run();
         await env.DB.prepare("INSERT OR IGNORE INTO logins (state, session, created) VALUES (?, ?, ?)").bind(state, session, Date.now()).run();
-        const origin = (env.APP_ORIGIN || "").split(",")[0].trim();
-        return page("Signed in", `<h1>You're signed in</h1><p>${esc(c.email || "")}</p><p>Return to Schedule I.O. Your devices will start syncing.</p><script>try{window.opener&&window.opener.postMessage({sioSignedIn:1},${JSON.stringify(origin)})}catch(e){}setTimeout(function(){try{window.close()}catch(e){}},1200)</script>`);
+        const origins = (env.APP_ORIGIN || "").split(",").map(o => o.trim()).filter(Boolean);
+        return page("Signed in", `<h1>You're signed in</h1><p>${esc(c.email || "")}</p><p>Return to Hourline. Your devices will start syncing.</p><script>try{window.opener&&${JSON.stringify(origins)}.forEach(function(o){window.opener.postMessage({sioSignedIn:1},o)})}catch(e){}setTimeout(function(){try{window.close()}catch(e){}},1200)</script>`);
       }
       if (path === "/auth/claim" && req.method === "GET") {
         const state = url.searchParams.get("state");
@@ -178,7 +178,7 @@ export default {
       if (path === "/" || path === "/health") return json({ ok: true, service: "schedule-io-sync" }, 200, ch);
       return json({ error: "not found" }, 404, ch);
     } catch (e) {
-      if (path === "/auth/callback") return page("Sign-in error", "<h1>Sign-in didn't work</h1><p>Return to Schedule I.O. and try again.</p>", 400);
+      if (path === "/auth/callback") return page("Sign-in error", "<h1>Sign-in didn't work</h1><p>Return to Hourline and try again.</p>", 400);
       return json({ error: "server error" }, 500, ch);
     }
   }
