@@ -2230,6 +2230,7 @@ async function syncNow(manual){
     if(SY.dirty){clearTimeout(pushT);pushT=setTimeout(()=>syncNow(),2000)}
   }catch(e){
     if(e.status===401){SY={};saveSY();toast("Sync signed out. Sign in again in Settings.")}
+    else if(e.status===503){SY.err="Sync is paused for maintenance. Your schedule is safe on this device.";saveSY()}
     else{SY.err=navigator.onLine?"Couldn't reach sync. Will retry.":"Offline. Changes will sync when you're back online.";saveSY()}
   }finally{syncing=false;renderSyncUI()}
 }

@@ -12,6 +12,7 @@
 //
 // Settings (Worker → Settings → Variables and secrets):
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
+//   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop)
 // Binding: D1 database as DB (tables: schema.sql).
 
 const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -36,22 +37,31 @@ const page = (title, body, status) => new Response(`<!doctype html><meta charset
 // ---- keys ----
 const keyCache = new Map();
 async function hmacKey(env) { return crypto.subtle.importKey("raw", enc.encode(env.SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]); }
-async function dataKey(env, sub) {
-  if (keyCache.has(sub)) return keyCache.get(sub);
-  const ikm = await crypto.subtle.importKey("raw", enc.encode(env.DATA_KEY), "HKDF", false, ["deriveKey"]);
+async function dataKey(secret, sub) {
+  const id = secret.length + ":" + secret.slice(0, 6) + ":" + sub; // cache per (key, account) so a rotated key never reuses a stale entry
+  if (keyCache.has(id)) return keyCache.get(id);
+  const ikm = await crypto.subtle.importKey("raw", enc.encode(secret), "HKDF", false, ["deriveKey"]);
   const k = await crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: enc.encode("schedule-io/data/v1"), info: enc.encode(sub) }, ikm, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   if (keyCache.size > 500) keyCache.clear();
-  keyCache.set(sub, k); return k;
+  keyCache.set(id, k); return k;
 }
 async function seal(env, sub, obj) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: enc.encode(sub) }, await dataKey(env, sub), enc.encode(JSON.stringify(obj)));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: enc.encode(sub) }, await dataKey(env.DATA_KEY, sub), enc.encode(JSON.stringify(obj)));
   return "v1." + b64u(iv) + "." + b64u(ct);
+}
+// Key rotation: set the new key as DATA_KEY and the previous one as DATA_KEY_OLD. Each schedule still under the old key
+// is re-encrypted with the new key the next time that account syncs. Keep DATA_KEY_OLD set until accounts have had time to
+// sync (a schedule that was never re-encrypted can't be read once DATA_KEY_OLD is removed; that account would start fresh).
+async function openWith(secret, sub, iv, ct) {
+  return JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64u(iv), additionalData: enc.encode(sub) }, await dataKey(secret, sub), unb64u(ct))));
 }
 async function open(env, sub, box) {
   const [v, iv, ct] = String(box).split(".");
   if (v !== "v1") throw new Error("unknown format");
-  return JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64u(iv), additionalData: enc.encode(sub) }, await dataKey(env, sub), unb64u(ct))));
+  try { return { doc: await openWith(env.DATA_KEY, sub, iv, ct), stale: false }; }
+  catch (e) { if (!env.DATA_KEY_OLD) throw e; }
+  return { doc: await openWith(env.DATA_KEY_OLD, sub, iv, ct), stale: true };
 }
 
 // ---- sessions: base64url(json).base64url(hmac); payload {sub, email, ver, exp} ----
@@ -113,6 +123,14 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url), path = url.pathname, ch = cors(env, req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...ch, ...SEC } });
+    // Emergency switch: set LOCKDOWN = 1 in Worker settings to stop all sign-ins and data access at once (the app keeps working
+    // offline on each device; nothing is lost). Remove it to turn sync back on.
+    if (env.LOCKDOWN === "1" || env.LOCKDOWN === "true") {
+      if (path === "/" || path === "/health") return json({ ok: true, lockdown: true }, 200, ch);
+      return path.startsWith("/auth/") && req.method !== "GET" || path === "/auth/start"
+        ? page("Sync paused", "<h1>Sync is paused</h1><p>Hourline sync is temporarily turned off. Your schedule is safe on your device. Try again later.</p>", 503)
+        : json({ error: "sync paused" }, 503, ch);
+    }
     try {
       if (path === "/auth/start" && req.method === "GET") {
         if (limited(req, 30)) return page("Slow down", "<h1>Too many attempts</h1><p>Wait a minute and try again.</p>", 429);
@@ -151,7 +169,10 @@ export default {
         if (!s) return json({ error: "signed out" }, 401, ch);
         if (req.method === "GET") {
           const row = await env.DB.prepare("SELECT rev, doc, updated FROM docs WHERE sub = ?").bind(s.sub).first();
-          return json(row ? { rev: row.rev, doc: await open(env, s.sub, row.doc), updated: row.updated } : { rev: 0, doc: null }, 200, ch);
+          if (!row) return json({ rev: 0, doc: null }, 200, ch);
+          const o = await open(env, s.sub, row.doc);
+          if (o.stale) await env.DB.prepare("UPDATE docs SET doc = ? WHERE sub = ? AND rev = ?").bind(await seal(env, s.sub, o.doc), s.sub, row.rev).run(); // re-encrypt under the new key
+          return json({ rev: row.rev, doc: o.doc, updated: row.updated }, 200, ch);
         }
         if (req.method === "PUT") {
           const text = await req.text();
@@ -165,7 +186,7 @@ export default {
             : await env.DB.prepare("INSERT OR IGNORE INTO docs (sub, rev, doc, updated) VALUES (?, 1, ?, ?)").bind(s.sub, box, now).run();
           if (!r.meta.changes) {
             const row = await env.DB.prepare("SELECT rev, doc FROM docs WHERE sub = ?").bind(s.sub).first();
-            return json({ error: "conflict", rev: row ? row.rev : 0, doc: row ? await open(env, s.sub, row.doc) : null }, 409, ch);
+            return json({ error: "conflict", rev: row ? row.rev : 0, doc: row ? (await open(env, s.sub, row.doc)).doc : null }, 409, ch);
           }
           return json({ rev: baseRev ? baseRev + 1 : 1, updated: now }, 200, ch);
         }
