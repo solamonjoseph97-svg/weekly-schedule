@@ -97,7 +97,7 @@ async function teams(env, req, s, path, ch) {
     return json({ teams: r.results || [] }, 200, ch);
   }
   if (parts.length === 1 && M === "POST") { // create a team; the creator is its lead
-    if (limited(req, 20)) return json({ error: "slow down" }, 429, ch);
+    if (limited(req, 20, "teams")) return json({ error: "slow down" }, 429, ch);
     const b = await body(), name = String(b.name || "").trim().slice(0, 40) || "Team";
     const owned = await env.DB.prepare("SELECT COUNT(*) AS n FROM teams WHERE owner = ?").bind(s.sub).first();
     if (owned && owned.n >= MAX_TEAMS_OWNED) return json({ error: "team limit" }, 403, ch);
@@ -107,7 +107,7 @@ async function teams(env, req, s, path, ch) {
     return json({ id, invite, mid, name, role: "lead" }, 200, ch);
   }
   if (parts.length === 2 && parts[1] === "join" && M === "POST") {
-    if (limited(req, 20)) return json({ error: "slow down" }, 429, ch);
+    if (limited(req, 20, "teams")) return json({ error: "slow down" }, 429, ch);
     const b = await body(), id = String(b.team || ""), inv = String(b.invite || "");
     const t = teamIdOk(id) && inv.length >= 20 ? await env.DB.prepare("SELECT id, name, invite_hash FROM teams WHERE id = ?").bind(id).first() : null;
     if (!t || (await sha256(inv)) !== t.invite_hash) return json({ error: "invite not valid" }, 403, ch);
@@ -138,6 +138,7 @@ async function teams(env, req, s, path, ch) {
     return json({ id, name: t ? t.name : "Team", members: out }, 200, ch);
   }
   if (parts.length === 3 && parts[2] === "snap" && M === "PUT") { // a member publishes their shared copy
+    if (limited(req, 30, "snap")) return json({ error: "slow down" }, 429, ch);
     const b = await body();
     if (!b.doc || typeof b.doc !== "object") return json({ error: "bad request" }, 400, ch);
     await env.DB.prepare("INSERT INTO snaps (team, sub, doc, updated) VALUES (?, ?, ?, ?) ON CONFLICT(team, sub) DO UPDATE SET doc = excluded.doc, updated = excluded.updated").bind(id, s.sub, await sealT(env, id, s.sub, b.doc), now).run();
@@ -223,8 +224,8 @@ async function verifyIdToken(env, token, nonce) {
 
 // ---- simple rate limit for sign-in endpoints (per isolate; pair with a Cloudflare rate-limit rule) ----
 const hits = new Map();
-function limited(req, max) {
-  const ip = req.headers.get("cf-connecting-ip") || "local", now = Date.now(), w = hits.get(ip) || [];
+function limited(req, max, bucket = "auth") { // separate counters per kind of request
+  const ip = (req.headers.get("cf-connecting-ip") || "local") + "|" + bucket, now = Date.now(), w = hits.get(ip) || [];
   const recent = w.filter(t => now - t < 60000); recent.push(now); hits.set(ip, recent);
   if (hits.size > 5000) hits.clear();
   return recent.length > max;
@@ -287,6 +288,7 @@ export default {
           return json({ rev: row.rev, doc: o.doc, updated: row.updated }, 200, ch);
         }
         if (req.method === "PUT") {
+          if (limited(req, 60, "data")) return json({ error: "slow down" }, 429, ch);
           const text = await req.text();
           if (text.length > MAX_DOC) return json({ error: "too large" }, 413, ch);
           const { baseRev, doc } = JSON.parse(text);
