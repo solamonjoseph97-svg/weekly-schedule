@@ -13,7 +13,8 @@
 // Settings (Worker → Settings → Variables and secrets):
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
 //   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop)
-// Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps (see schema.sql).
+// Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf (created on
+// first use, also in schema.sql). Cron Trigger every minute sends due notifications (wrangler.toml [triggers]).
 
 const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_JWKS = "https://www.googleapis.com/oauth2/v3/certs";
@@ -178,6 +179,141 @@ async function teams(env, req, s, path, ch) {
 }
 
 // ---- sessions: base64url(json).base64url(hmac); payload {sub, email, ver, exp} ----
+// ---- push notifications (Web Push, RFC 8291 + VAPID RFC 8292) ----
+// Each device sends its own list of upcoming alerts (time + short title/body) for the next week; the minute timer
+// (Cron Trigger) sends whatever is due. The device's push address and its alert list are sealed with the account key,
+// like schedules. Only the next alert time is stored in the clear, so the timer can find due rows. Message contents are
+// encrypted again for the device itself, so Apple, Google and Mozilla relay them without being able to read them.
+// The signing key (VAPID) is created on first use and stored sealed, so there's no extra secret to set up.
+const PUSH_HOSTS = /(^|\.)(fcm\.googleapis\.com|android\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)$/;
+const MAX_Q = 80, MAX_DEVICES = 10, PUSH_AHEAD = 8 * 864e5, PUSH_LATE = 15 * 60000, PUSH_IDLE = 30 * 864e5;
+const PUSH_URL = /^\/app\/(#[a-z]{1,20})?$/, PUSH_TAG = /^[A-Za-z0-9_@|.-]{0,60}$/;
+let pushReady = false, VK = null;
+async function pushInit(env) {
+  if (pushReady) return;
+  for (const q of ["CREATE TABLE IF NOT EXISTS push (id TEXT PRIMARY KEY, sub TEXT NOT NULL, box TEXT NOT NULL, next_at INTEGER, updated INTEGER NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS push_next ON push (next_at)", "CREATE INDEX IF NOT EXISTS push_by_sub ON push (sub)",
+    "CREATE TABLE IF NOT EXISTS conf (k TEXT PRIMARY KEY, v TEXT NOT NULL)"]) await env.DB.prepare(q).run();
+  pushReady = true;
+}
+async function vapidKeys(env) {
+  if (VK) return VK;
+  await pushInit(env);
+  let row = await env.DB.prepare("SELECT v FROM conf WHERE k = 'vapid'").first();
+  if (!row) {
+    const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const pub = b64u(await crypto.subtle.exportKey("raw", kp.publicKey)), jwk = await crypto.subtle.exportKey("jwk", kp.privateKey);
+    await env.DB.prepare("INSERT OR IGNORE INTO conf (k, v) VALUES ('vapid', ?)").bind(await seal(env, "vapid", { pub, jwk })).run();
+    row = await env.DB.prepare("SELECT v FROM conf WHERE k = 'vapid'").first(); // another request may have won the race: use theirs
+  }
+  const { doc } = await open(env, "vapid", row.v);
+  VK = { pub: doc.pub, key: await crypto.subtle.importKey("jwk", doc.jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]) };
+  return VK;
+}
+const cat = (...a) => { const o = new Uint8Array(a.reduce((n, x) => n + x.length, 0)); let i = 0; for (const x of a) { o.set(x, i); i += x.length; } return o; };
+async function hkdf(salt, ikm, info, len) {
+  const k = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info }, k, len * 8));
+}
+async function encryptPush(t, text) { // RFC 8291, aes128gcm, single record
+  const ua = unb64u(t.p256dh), auth = unb64u(t.auth);
+  const eph = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const asPub = new Uint8Array(await crypto.subtle.exportKey("raw", eph.publicKey));
+  const uaKey = await crypto.subtle.importKey("raw", ua, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: uaKey }, eph.privateKey, 256));
+  const ikm = await hkdf(auth, shared, cat(enc.encode("WebPush: info\0"), ua, asPub), 32);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const cek = await hkdf(salt, ikm, enc.encode("Content-Encoding: aes128gcm\0"), 16), nonce = await hkdf(salt, ikm, enc.encode("Content-Encoding: nonce\0"), 12);
+  const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, cat(enc.encode(text), new Uint8Array([2]))));
+  const hdr = new Uint8Array(21); hdr.set(salt, 0); new DataView(hdr.buffer).setUint32(16, 4096); hdr[20] = 65;
+  return cat(hdr, asPub, ct);
+}
+async function sendPush(env, t, msg) {
+  const V = await vapidKeys(env), aud = new URL(t.ep).origin;
+  const h = b64u(enc.encode(JSON.stringify({ typ: "JWT", alg: "ES256" }))), p = b64u(enc.encode(JSON.stringify({ aud, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: "https://hourline.io" })));
+  const sig = b64u(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, V.key, enc.encode(h + "." + p)));
+  const body = await encryptPush(t, JSON.stringify({ title: msg.title, body: msg.body, url: msg.url || "/app/", tag: msg.tag || "" }));
+  const r = await fetch(t.ep, { method: "POST", body, headers: { authorization: `vapid t=${h}.${p}.${sig}, k=${V.pub}`, "content-encoding": "aes128gcm", "content-type": "application/octet-stream", ttl: "900", urgency: "high" } });
+  return r.status;
+}
+function pushTarget(env, b) {
+  const s = b && b.sub, ep = s && String(s.endpoint || ""), k = s && s.keys || {};
+  let u; try { u = new URL(ep); } catch { return null; }
+  const test = env.PUSH_TEST_ORIGIN && u.origin === env.PUSH_TEST_ORIGIN; // local test harness only
+  if (!test && (u.protocol !== "https:" || !PUSH_HOSTS.test(u.hostname))) return null; // only real push services: never an arbitrary URL
+  if (ep.length > 1000) return null;
+  try { if (unb64u(String(k.p256dh || "")).length !== 65 || unb64u(String(k.auth || "")).length !== 16) return null; } catch { return null; }
+  return { ep, p256dh: String(k.p256dh), auth: String(k.auth) };
+}
+function pushQueue(q, now) {
+  if (!Array.isArray(q) || q.length > MAX_Q) return null;
+  const out = [];
+  for (const x of q) {
+    if (!x || !Number.isInteger(x.at) || typeof x.title !== "string" || typeof (x.body || "") !== "string") return null;
+    if (x.title.length > 60 || (x.body || "").length > 140 || (x.url && !PUSH_URL.test(x.url)) || !PUSH_TAG.test(x.tag || "")) return null;
+    if (x.at > now + PUSH_AHEAD) return null;
+    if (x.at > now - 60000) out.push({ at: x.at, title: x.title, body: x.body || "", url: x.url || "/app/", tag: x.tag || "" });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+const nextAt = q => q.length ? q[0].at : null;
+async function pushRoutes(env, req, s, path, ch) {
+  await pushInit(env);
+  const now = Date.now(), b = await req.json().catch(() => null), t = pushTarget(env, b);
+  if (!t) return json({ error: "bad subscription" }, 400, ch);
+  const id = "p_" + await sha256("push:" + t.ep);
+  if (path === "/push" && req.method === "PUT") { // turn on / refresh this device's alert list
+    if (limited(req, 30, "push")) return json({ error: "slow down" }, 429, ch);
+    const q = pushQueue(b.q, now);
+    if (!q) return json({ error: "bad alerts" }, 400, ch);
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM push WHERE sub = ? AND id != ?").bind(s.sub, id).first();
+    if (n && n.n >= MAX_DEVICES) return json({ error: "too many devices" }, 409, ch);
+    const own = await env.DB.prepare("SELECT sub FROM push WHERE id = ?").bind(id).first();
+    if (own && own.sub !== s.sub) await env.DB.prepare("DELETE FROM push WHERE id = ?").bind(id).run(); // device changed accounts
+    const box = await seal(env, s.sub, { ...t, q });
+    await env.DB.prepare("INSERT INTO push (id, sub, box, next_at, updated) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET box = excluded.box, next_at = excluded.next_at, updated = excluded.updated")
+      .bind(id, s.sub, box, nextAt(q), now).run();
+    return json({ ok: true, queued: q.length }, 200, ch);
+  }
+  if (path === "/push/off" && req.method === "POST") {
+    await env.DB.prepare("DELETE FROM push WHERE id = ? AND sub = ?").bind(id, s.sub).run();
+    return json({ ok: true }, 200, ch);
+  }
+  if (path === "/push/test" && req.method === "POST") { // "Send a test" in Settings
+    if (limited(req, 5, "ptest")) return json({ error: "slow down" }, 429, ch);
+    const row = await env.DB.prepare("SELECT sub FROM push WHERE id = ? AND sub = ?").bind(id, s.sub).first();
+    if (!row) return json({ error: "not turned on" }, 404, ch);
+    const st = await sendPush(env, t, { title: "Hourline", body: "Notifications are on. This is how block starts will look.", url: "/app/", tag: "test" });
+    if (st === 404 || st === 410) { await env.DB.prepare("DELETE FROM push WHERE id = ?").bind(id).run(); return json({ error: "expired" }, 410, ch); }
+    return json({ ok: st >= 200 && st < 300, status: st }, 200, ch);
+  }
+  return json({ error: "not found" }, 404, ch);
+}
+// Runs every minute (wrangler.toml [triggers]). Sends due alerts, drops expired devices and ones idle for 30 days.
+async function runPush(env, now = Date.now()) {
+  if (env.LOCKDOWN === "1" || env.LOCKDOWN === "true") return { sent: 0 };
+  await pushInit(env);
+  await env.DB.prepare("DELETE FROM push WHERE updated < ?").bind(now - PUSH_IDLE).run();
+  const rows = (await env.DB.prepare("SELECT id, sub, box, updated FROM push WHERE next_at IS NOT NULL AND next_at <= ? ORDER BY next_at LIMIT 300").bind(now).all()).results || [];
+  let sent = 0, dropped = 0;
+  for (const r of rows) {
+    let doc;
+    try { doc = (await open(env, r.sub, r.box)).doc; } catch { await env.DB.prepare("DELETE FROM push WHERE id = ?").bind(r.id).run(); dropped++; continue; }
+    const due = doc.q.filter(x => x.at <= now && now - x.at < PUSH_LATE).slice(-2), rest = doc.q.filter(x => x.at > now);
+    let gone = false;
+    for (const m of due) {
+      let st = 0; try { st = await sendPush(env, doc, m); } catch { st = 0; }
+      if (st === 404 || st === 410) { gone = true; break; }
+      if (st >= 200 && st < 300) sent++;
+    }
+    if (gone) { await env.DB.prepare("DELETE FROM push WHERE id = ?").bind(r.id).run(); dropped++; continue; }
+    // Only write back if the device didn't send a fresh list meanwhile.
+    await env.DB.prepare("UPDATE push SET box = ?, next_at = ? WHERE id = ? AND updated = ?").bind(await seal(env, r.sub, { ...doc, q: rest }), nextAt(rest), r.id, r.updated).run();
+  }
+  return { sent, dropped, rows: rows.length };
+}
+
 async function makeSession(env, sub, email, ver) {
   const body = b64u(enc.encode(JSON.stringify({ sub, email, ver, exp: Date.now() + SESSION_DAYS * 864e5 })));
   return body + "." + b64u(await crypto.subtle.sign("HMAC", await hmacKey(env), enc.encode(body)));
@@ -310,6 +446,7 @@ export default {
           for (const t of owned) await dropTeam(env, t.id);
           await env.DB.prepare("DELETE FROM snaps WHERE sub = ?").bind(s.sub).run();
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
+          await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
           return json({ ok: true }, 200, ch);
         }
@@ -318,6 +455,11 @@ export default {
         if (!s) return json({ error: "signed out" }, 401, ch);
         return await teams(env, req, s, path, ch);
       }
+      if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
+      if (path === "/push" || path.startsWith("/push/")) {
+        if (!s) return json({ error: "signed out" }, 401, ch);
+        return await pushRoutes(env, req, s, path, ch);
+      }
       if (path === "/" || path === "/health") return json({ ok: true, service: "schedule-io-sync" }, 200, ch);
       return json({ error: "not found" }, 404, ch);
     } catch (e) {
@@ -325,5 +467,6 @@ export default {
       if (path === "/auth/callback") return page("Sign-in error", "<h1>Sign-in didn't work</h1><p>Return to Hourline and try again.</p>", 400);
       return json({ error: "server error" }, 500, ch);
     }
-  }
+  },
+  async scheduled(ev, env, ctx) { ctx.waitUntil(runPush(env)); } // every minute: send due notifications
 };

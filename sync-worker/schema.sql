@@ -6,3 +6,8 @@ CREATE TABLE IF NOT EXISTS members (team TEXT NOT NULL, sub TEXT NOT NULL, mid T
 CREATE INDEX IF NOT EXISTS members_by_sub ON members (sub);
 CREATE INDEX IF NOT EXISTS members_by_mid ON members (team, mid);
 CREATE TABLE IF NOT EXISTS snaps (team TEXT NOT NULL, sub TEXT NOT NULL, doc TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (team, sub));
+-- Push notifications (the worker also creates these on first use, so no manual step is needed)
+CREATE TABLE IF NOT EXISTS push (id TEXT PRIMARY KEY, sub TEXT NOT NULL, box TEXT NOT NULL, next_at INTEGER, updated INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS push_next ON push (next_at);
+CREATE INDEX IF NOT EXISTS push_by_sub ON push (sub);
+CREATE TABLE IF NOT EXISTS conf (k TEXT PRIMARY KEY, v TEXT NOT NULL);

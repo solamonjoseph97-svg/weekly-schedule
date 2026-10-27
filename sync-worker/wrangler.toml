@@ -17,3 +17,7 @@ database_id = "838137a3-0443-4f2e-893d-28d159314218"
 
 [observability]
 enabled = true
+
+# Every minute: send notifications that are due (free plan includes Cron Triggers).
+[triggers]
+crons = ["* * * * *"]
