@@ -13,7 +13,7 @@
 // Settings (Worker → Settings → Variables and secrets):
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
 //   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop)
-// Binding: D1 database as DB (tables: schema.sql).
+// Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps (see schema.sql).
 
 const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_JWKS = "https://www.googleapis.com/oauth2/v3/certs";
@@ -62,6 +62,118 @@ async function open(env, sub, box) {
   try { return { doc: await openWith(env.DATA_KEY, sub, iv, ct), stale: false }; }
   catch (e) { if (!env.DATA_KEY_OLD) throw e; }
   return { doc: await openWith(env.DATA_KEY_OLD, sub, iv, ct), stale: true };
+}
+
+// ---- teams: a member's device publishes a filtered copy of their schedule for their team lead ----
+// Each copy is encrypted with a key unique to the team (HKDF info "team:<id>"), with team and member bound in as
+// additional data. Every request re-checks membership in the database; removing someone deletes their copy at once.
+const MAX_SNAP = 400_000, MAX_TEAMS_OWNED = 5, MAX_MEMBERS = 500;
+const teamIdOk = t => /^tm_[A-Za-z0-9_-]{16,40}$/.test(t || "");
+const rnd = n => b64u(crypto.getRandomValues(new Uint8Array(n)));
+const sha256 = async t => b64u(await crypto.subtle.digest("SHA-256", enc.encode(t)));
+async function sealT(env, team, sub, obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: enc.encode(team + "|" + sub) }, await dataKey(env.DATA_KEY, "team:" + team), enc.encode(JSON.stringify(obj)));
+  return "v1." + b64u(iv) + "." + b64u(ct);
+}
+async function openT(env, team, sub, box) {
+  const [v, iv, ct] = String(box).split(".");
+  if (v !== "v1") throw new Error("unknown format");
+  const tryKey = async secret => JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64u(iv), additionalData: enc.encode(team + "|" + sub) }, await dataKey(secret, "team:" + team), unb64u(ct))));
+  try { return { doc: await tryKey(env.DATA_KEY), stale: false }; } catch (e) { if (!env.DATA_KEY_OLD) throw e; }
+  return { doc: await tryKey(env.DATA_KEY_OLD), stale: true };
+}
+async function memberOf(env, team, sub) { return env.DB.prepare("SELECT role, mid FROM members WHERE team = ? AND sub = ?").bind(team, sub).first(); }
+async function dropTeam(env, team) {
+  await env.DB.prepare("DELETE FROM snaps WHERE team = ?").bind(team).run();
+  await env.DB.prepare("DELETE FROM members WHERE team = ?").bind(team).run();
+  await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(team).run();
+}
+async function teams(env, req, s, path, ch) {
+  const parts = path.split("/").filter(Boolean), M = req.method, now = Date.now();
+  const body = async () => { const t = await req.text(); if (t.length > MAX_SNAP) throw Object.assign(new Error("too large"), { status: 413 }); return t ? JSON.parse(t) : {}; };
+  if (parts.length === 1 && M === "GET") { // my teams
+    const r = await env.DB.prepare("SELECT m.team AS id, m.role AS role, m.mid AS mid, t.name AS name FROM members m JOIN teams t ON t.id = m.team WHERE m.sub = ?").bind(s.sub).all();
+    return json({ teams: r.results || [] }, 200, ch);
+  }
+  if (parts.length === 1 && M === "POST") { // create a team; the creator is its lead
+    if (limited(req, 20)) return json({ error: "slow down" }, 429, ch);
+    const b = await body(), name = String(b.name || "").trim().slice(0, 40) || "Team";
+    const owned = await env.DB.prepare("SELECT COUNT(*) AS n FROM teams WHERE owner = ?").bind(s.sub).first();
+    if (owned && owned.n >= MAX_TEAMS_OWNED) return json({ error: "team limit" }, 403, ch);
+    const id = "tm_" + rnd(18), invite = rnd(24), mid = "mb_" + rnd(12);
+    await env.DB.prepare("INSERT INTO teams (id, owner, name, invite_hash, created) VALUES (?, ?, ?, ?, ?)").bind(id, s.sub, name, await sha256(invite), now).run();
+    await env.DB.prepare("INSERT INTO members (team, sub, mid, role, joined) VALUES (?, ?, ?, 'lead', ?)").bind(id, s.sub, mid, now).run();
+    return json({ id, invite, mid, name, role: "lead" }, 200, ch);
+  }
+  if (parts.length === 2 && parts[1] === "join" && M === "POST") {
+    if (limited(req, 20)) return json({ error: "slow down" }, 429, ch);
+    const b = await body(), id = String(b.team || ""), inv = String(b.invite || "");
+    const t = teamIdOk(id) && inv.length >= 20 ? await env.DB.prepare("SELECT id, name, invite_hash FROM teams WHERE id = ?").bind(id).first() : null;
+    if (!t || (await sha256(inv)) !== t.invite_hash) return json({ error: "invite not valid" }, 403, ch);
+    const had = await memberOf(env, id, s.sub);
+    if (had) return json({ id, name: t.name, role: had.role, mid: had.mid }, 200, ch);
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE team = ?").bind(id).first();
+    if (n && n.n >= MAX_MEMBERS) return json({ error: "team full" }, 403, ch);
+    const mid = "mb_" + rnd(12);
+    await env.DB.prepare("INSERT INTO members (team, sub, mid, role, joined) VALUES (?, ?, ?, 'member', ?)").bind(id, s.sub, mid, now).run();
+    return json({ id, name: t.name, role: "member", mid }, 200, ch);
+  }
+  const id = parts[1];
+  if (!teamIdOk(id)) return json({ error: "not found" }, 404, ch);
+  const me = await memberOf(env, id, s.sub);
+  if (!me) return json({ error: "not found" }, 404, ch); // never reveal whether a team exists to outsiders
+  const lead = me.role === "lead";
+  if (parts.length === 2 && M === "GET") { // lead only: every member's latest shared copy
+    if (!lead) return json({ error: "forbidden" }, 403, ch);
+    const t = await env.DB.prepare("SELECT name FROM teams WHERE id = ?").bind(id).first();
+    const ms = (await env.DB.prepare("SELECT m.sub AS sub, m.mid AS mid, m.role AS role, m.joined AS joined, s.doc AS doc, s.updated AS updated FROM members m LEFT JOIN snaps s ON s.team = m.team AND s.sub = m.sub WHERE m.team = ?").bind(id).all()).results || [];
+    const out = [];
+    for (const m of ms) {
+      if (m.sub === s.sub) continue;
+      let doc = null;
+      if (m.doc) { try { const o = await openT(env, id, m.sub, m.doc); doc = o.doc; if (o.stale) await env.DB.prepare("UPDATE snaps SET doc = ? WHERE team = ? AND sub = ? AND updated = ?").bind(await sealT(env, id, m.sub, doc), id, m.sub, m.updated).run(); } catch { doc = null; } }
+      out.push({ mid: m.mid, role: m.role, joined: m.joined, updated: m.updated || null, doc });
+    }
+    return json({ id, name: t ? t.name : "Team", members: out }, 200, ch);
+  }
+  if (parts.length === 3 && parts[2] === "snap" && M === "PUT") { // a member publishes their shared copy
+    const b = await body();
+    if (!b.doc || typeof b.doc !== "object") return json({ error: "bad request" }, 400, ch);
+    await env.DB.prepare("INSERT INTO snaps (team, sub, doc, updated) VALUES (?, ?, ?, ?) ON CONFLICT(team, sub) DO UPDATE SET doc = excluded.doc, updated = excluded.updated").bind(id, s.sub, await sealT(env, id, s.sub, b.doc), now).run();
+    return json({ updated: now }, 200, ch);
+  }
+  if (parts.length === 3 && parts[2] === "snap" && M === "DELETE") { // stop sharing, stay on the team
+    await env.DB.prepare("DELETE FROM snaps WHERE team = ? AND sub = ?").bind(id, s.sub).run();
+    return json({ ok: true }, 200, ch);
+  }
+  if (parts.length === 3 && parts[2] === "invite" && M === "POST") { // lead: new invite code; old links stop working
+    if (!lead) return json({ error: "forbidden" }, 403, ch);
+    const invite = rnd(24);
+    await env.DB.prepare("UPDATE teams SET invite_hash = ? WHERE id = ?").bind(await sha256(invite), id).run();
+    return json({ invite }, 200, ch);
+  }
+  if (parts.length === 3 && parts[2] === "name" && M === "PUT") {
+    if (!lead) return json({ error: "forbidden" }, 403, ch);
+    const b = await body();
+    await env.DB.prepare("UPDATE teams SET name = ? WHERE id = ?").bind(String(b.name || "").trim().slice(0, 40) || "Team", id).run();
+    return json({ ok: true }, 200, ch);
+  }
+  if (parts.length === 4 && parts[2] === "members" && M === "DELETE") { // lead removes someone, or a member leaves
+    const target = await env.DB.prepare("SELECT sub, role FROM members WHERE team = ? AND mid = ?").bind(id, parts[3]).first();
+    if (!target) return json({ error: "not found" }, 404, ch);
+    const self = target.sub === s.sub;
+    if (!(self || lead) || (self && lead)) return json({ error: "forbidden" }, 403, ch); // a lead deletes the team instead
+    await env.DB.prepare("DELETE FROM snaps WHERE team = ? AND sub = ?").bind(id, target.sub).run();
+    await env.DB.prepare("DELETE FROM members WHERE team = ? AND sub = ?").bind(id, target.sub).run();
+    return json({ ok: true }, 200, ch);
+  }
+  if (parts.length === 2 && M === "DELETE") { // lead deletes the team and every shared copy in it
+    if (!lead) return json({ error: "forbidden" }, 403, ch);
+    await dropTeam(env, id);
+    return json({ ok: true }, 200, ch);
+  }
+  return json({ error: "not found" }, 404, ch);
 }
 
 // ---- sessions: base64url(json).base64url(hmac); payload {sub, email, ver, exp} ----
@@ -192,13 +304,22 @@ export default {
         }
         if (req.method === "DELETE") { // "Delete my cloud data": removes the schedule and signs out every device
           await env.DB.prepare("DELETE FROM docs WHERE sub = ?").bind(s.sub).run();
+          const owned = (await env.DB.prepare("SELECT id FROM teams WHERE owner = ?").bind(s.sub).all()).results || [];
+          for (const t of owned) await dropTeam(env, t.id);
+          await env.DB.prepare("DELETE FROM snaps WHERE sub = ?").bind(s.sub).run();
+          await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
           return json({ ok: true }, 200, ch);
         }
       }
+      if (path === "/teams" || path.startsWith("/teams/")) {
+        if (!s) return json({ error: "signed out" }, 401, ch);
+        return await teams(env, req, s, path, ch);
+      }
       if (path === "/" || path === "/health") return json({ ok: true, service: "schedule-io-sync" }, 200, ch);
       return json({ error: "not found" }, 404, ch);
     } catch (e) {
+      if (e && e.status === 413) return json({ error: "too large" }, 413, ch);
       if (path === "/auth/callback") return page("Sign-in error", "<h1>Sign-in didn't work</h1><p>Return to Hourline and try again.</p>", 400);
       return json({ error: "server error" }, 500, ch);
     }
