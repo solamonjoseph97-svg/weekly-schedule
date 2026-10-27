@@ -1,0 +1,19 @@
+# Cloudflare deploy settings for the Hourline sync service (schedule-io-sync).
+# Cloudflare Workers Builds deploys this folder automatically when the `main` branch changes.
+# Daily improvement runs never push worker changes to main: they push to the `worker-next` branch,
+# and Nathaniel approves a deploy by merging worker-next into main on GitHub.
+name = "schedule-io-sync"
+main = "worker.js"
+compatibility_date = "2026-10-19"
+workers_dev = true
+keep_vars = true            # keep APP_ORIGIN, GOOGLE_CLIENT_ID and any LOCKDOWN switch set in the dashboard
+
+routes = [ { pattern = "api.hourline.io", custom_domain = true } ]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "schedule-io"
+database_id = "838137a3-0443-4f2e-893d-28d159314218"
+
+[observability]
+enabled = true
