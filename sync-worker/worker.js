@@ -14,7 +14,7 @@
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
 //   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop),
 //   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation), ELLA_DAILY (text, messages per account per day, default 40)
-// Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf (created on
+// Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf, nudge_use (created on
 // first use, also in schema.sql). Cron Trigger every minute sends due notifications (wrangler.toml [triggers]).
 
 const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -150,6 +150,38 @@ async function teams(env, req, s, path, ch) {
     await env.DB.prepare("DELETE FROM snaps WHERE team = ? AND sub = ?").bind(id, s.sub).run();
     return json({ ok: true }, 200, ch);
   }
+  if (parts.length === 3 && parts[2] === "nudge" && M === "POST") { // lead: "time to check in" on members' lock screens
+    if (!lead) return json({ error: "forbidden" }, 403, ch);
+    if (limited(req, 8, "nudge")) return json({ error: "slow down" }, 429, ch);
+    const b = await body();
+    const mids = Array.isArray(b.mids) ? [...new Set(b.mids.map(String))] : [];
+    if (!mids.length || mids.length > NUDGE_BATCH) return json({ error: "bad request" }, 400, ch);
+    await pushInit(env); await nudgeInit(env);
+    const day = new Date(now).toISOString().slice(0, 10);
+    await env.DB.prepare("DELETE FROM nudge_use WHERE day < ?").bind(day).run();
+    const t = await env.DB.prepare("SELECT name FROM teams WHERE id = ?").bind(id).first();
+    // Fixed wording: a lead can't put their own text on someone's lock screen. No schedule details are included.
+    const msg = { title: String(t && t.name || "Your team").slice(0, 40), body: "Your team lead is asking for today's check-in. Tap to check in.", url: "/app/#checkin", tag: "nudge" };
+    const out = { sent: [], none: [], capped: [] };
+    for (const mid of mids) {
+      const m = await env.DB.prepare("SELECT sub FROM members WHERE team = ? AND mid = ?").bind(id, mid).first();
+      if (!m || m.sub === s.sub) continue;
+      const used = await env.DB.prepare("SELECT n FROM nudge_use WHERE team = ? AND sub = ? AND day = ?").bind(id, m.sub, day).first();
+      if (used && used.n >= NUDGE_DAILY) { out.capped.push(mid); continue; }
+      const devs = (await env.DB.prepare("SELECT id, box FROM push WHERE sub = ? ORDER BY updated DESC LIMIT ?").bind(m.sub, NUDGE_DEVICES).all()).results || [];
+      let n = 0;
+      for (const d of devs) {
+        let doc; try { doc = (await open(env, m.sub, d.box)).doc; } catch { continue; }
+        let st = 0; try { st = await sendPush(env, doc, msg); } catch { st = 0; }
+        if (st === 404 || st === 410) await env.DB.prepare("DELETE FROM push WHERE id = ?").bind(d.id).run();
+        else if (st >= 200 && st < 300) n++;
+      }
+      if (!n) { out.none.push(mid); continue; } // no phone with notifications on: the app offers a text instead
+      await env.DB.prepare("INSERT INTO nudge_use (team, sub, day, n) VALUES (?, ?, ?, 1) ON CONFLICT(team, sub, day) DO UPDATE SET n = n + 1").bind(id, m.sub, day).run();
+      out.sent.push(mid);
+    }
+    return json(out, 200, ch);
+  }
   if (parts.length === 3 && parts[2] === "invite" && M === "POST") { // lead: new invite code; old links stop working
     if (!lead) return json({ error: "forbidden" }, 403, ch);
     const invite = rnd(24);
@@ -260,6 +292,11 @@ function pushQueue(q, now) {
   return out.sort((a, b) => a.at - b.at);
 }
 const nextAt = q => q.length ? q[0].at : null;
+// Leader nudges: at most NUDGE_DAILY per member per team per day, NUDGE_BATCH members per request (keeps each request
+// well under Cloudflare's outgoing-request limit; the app sends larger teams in batches), newest NUDGE_DEVICES phones each.
+const NUDGE_DAILY = 2, NUDGE_BATCH = 15, NUDGE_DEVICES = 3;
+let nudgeReady = false;
+async function nudgeInit(env) { if (nudgeReady) return; await env.DB.prepare("CREATE TABLE IF NOT EXISTS nudge_use (team TEXT NOT NULL, sub TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (team, sub, day))").run(); nudgeReady = true; }
 async function pushRoutes(env, req, s, path, ch) {
   await pushInit(env);
   const now = Date.now(), b = await req.json().catch(() => null), t = pushTarget(env, b);
@@ -490,6 +527,7 @@ export default {
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
+          await nudgeInit(env); await env.DB.prepare("DELETE FROM nudge_use WHERE sub = ?").bind(s.sub).run();
           await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
           return json({ ok: true }, 200, ch);
         }
