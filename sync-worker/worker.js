@@ -14,7 +14,7 @@
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
 //   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop),
 //   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation), ELLA_DAILY (text, messages per account per day, default 40)
-// Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf, nudge_use (created on
+// Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf, nudge_use; partners (created on
 // first use, also in schema.sql). Cron Trigger every minute sends due notifications (wrangler.toml [triggers]).
 
 const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -206,6 +206,76 @@ async function teams(env, req, s, path, ch) {
   if (parts.length === 2 && M === "DELETE") { // lead deletes the team and every shared copy in it
     if (!lead) return json({ error: "forbidden" }, 403, ch);
     await dropTeam(env, id);
+    return json({ ok: true }, 200, ch);
+  }
+  return json({ error: "not found" }, 404, ch);
+}
+
+// ---- accountability partners (one way): the owner shares chosen categories with one partner per invite link ----
+// The partner sees only what the owner's app sends (same shape as a team copy); the owner never sees anything of the
+// partner's. Invite links work once. Names and the shared copy are sealed per partner link, like team copies.
+const MAX_PARTNERS = 5, MAX_WATCHING = 20, partnerIdOk = id => /^pt_[A-Za-z0-9_-]{20,40}$/.test(id || "");
+let partnersReady = false;
+async function partnersInit(env) {
+  if (partnersReady) return;
+  for (const q of ["CREATE TABLE IF NOT EXISTS partners (id TEXT PRIMARY KEY, owner TEXT NOT NULL, viewer TEXT, invite_hash TEXT, names TEXT, doc TEXT, updated INTEGER, created INTEGER NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS partners_by_owner ON partners (owner)", "CREATE INDEX IF NOT EXISTS partners_by_viewer ON partners (viewer)"]) await env.DB.prepare(q).run();
+  partnersReady = true;
+}
+const pName = v => String(v || "").trim().slice(0, 40);
+async function pNames(env, r) { if (!r.names) return {}; try { return (await openT(env, r.id, "names", r.names)).doc || {}; } catch { return {}; } }
+async function partners(env, req, s, path, ch) {
+  await partnersInit(env);
+  const parts = path.split("/").filter(Boolean), M = req.method, now = Date.now();
+  const body = async () => { const t = await req.text(); if (t.length > MAX_SNAP) throw Object.assign(new Error("too large"), { status: 413 }); return t ? JSON.parse(t) : {}; };
+  if (parts.length === 1 && M === "GET") {
+    const mine = (await env.DB.prepare("SELECT id, viewer, names, created FROM partners WHERE owner = ?").bind(s.sub).all()).results || [];
+    const shared = (await env.DB.prepare("SELECT id, owner, names, doc, updated FROM partners WHERE viewer = ?").bind(s.sub).all()).results || [];
+    const out = { mine: [], shared: [] };
+    for (const r of mine) out.mine.push({ id: r.id, accepted: !!r.viewer, partner: r.viewer ? pName((await pNames(env, r)).viewer) : "", created: r.created });
+    for (const r of shared) {
+      let doc = null;
+      if (r.doc) { try { const o = await openT(env, r.id, r.owner, r.doc); doc = o.doc; if (o.stale) await env.DB.prepare("UPDATE partners SET doc = ? WHERE id = ? AND updated = ?").bind(await sealT(env, r.id, r.owner, doc), r.id, r.updated).run(); } catch { doc = null; } }
+      out.shared.push({ id: r.id, name: pName((await pNames(env, r)).owner), updated: r.updated || null, doc });
+    }
+    return json(out, 200, ch);
+  }
+  if (parts.length === 1 && M === "POST") { // owner makes an invite link
+    if (limited(req, 20, "partners")) return json({ error: "slow down" }, 429, ch);
+    const b = await body();
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM partners WHERE owner = ?").bind(s.sub).first();
+    if (n && n.n >= MAX_PARTNERS) return json({ error: "partner limit" }, 403, ch);
+    const id = "pt_" + rnd(18), invite = rnd(24);
+    await env.DB.prepare("INSERT INTO partners (id, owner, invite_hash, names, created) VALUES (?, ?, ?, ?, ?)").bind(id, s.sub, await sha256(invite), await sealT(env, id, "names", { owner: pName(b.name) }), now).run();
+    return json({ id, invite }, 200, ch);
+  }
+  if (parts.length === 2 && parts[1] === "accept" && M === "POST") {
+    if (limited(req, 20, "partners")) return json({ error: "slow down" }, 429, ch);
+    const b = await body(), id = String(b.id || ""), inv = String(b.invite || "");
+    const r = partnerIdOk(id) ? await env.DB.prepare("SELECT * FROM partners WHERE id = ?").bind(id).first() : null;
+    if (r && r.viewer === s.sub) return json({ id, name: pName((await pNames(env, r)).owner) }, 200, ch); // already accepted
+    if (!r || r.viewer || !r.invite_hash || inv.length < 20 || (await sha256(inv)) !== r.invite_hash) return json({ error: "invite not valid" }, 403, ch);
+    if (r.owner === s.sub) return json({ error: "own invite" }, 400, ch);
+    const w = await env.DB.prepare("SELECT COUNT(*) AS n FROM partners WHERE viewer = ?").bind(s.sub).first();
+    if (w && w.n >= MAX_WATCHING) return json({ error: "partner limit" }, 403, ch);
+    const names = { ...(await pNames(env, r)), viewer: pName(b.name) };
+    const u = await env.DB.prepare("UPDATE partners SET viewer = ?, invite_hash = NULL, names = ? WHERE id = ? AND viewer IS NULL").bind(s.sub, await sealT(env, id, "names", names), id).run();
+    if (!u.meta.changes) return json({ error: "invite not valid" }, 403, ch);
+    return json({ id, name: pName(names.owner) }, 200, ch);
+  }
+  const id = parts[1];
+  const r = partnerIdOk(id) ? await env.DB.prepare("SELECT id, owner, viewer FROM partners WHERE id = ?").bind(id).first() : null;
+  if (!r || (r.owner !== s.sub && r.viewer !== s.sub)) return json({ error: "not found" }, 404, ch);
+  if (parts.length === 3 && parts[2] === "snap" && M === "PUT") { // owner publishes what this partner may see
+    if (r.owner !== s.sub) return json({ error: "forbidden" }, 403, ch);
+    if (limited(req, 30, "psnap")) return json({ error: "slow down" }, 429, ch);
+    const b = await body();
+    if (!b.doc || typeof b.doc !== "object") return json({ error: "bad request" }, 400, ch);
+    await env.DB.prepare("UPDATE partners SET doc = ?, updated = ? WHERE id = ?").bind(await sealT(env, id, r.owner, b.doc), now, id).run();
+    return json({ updated: now }, 200, ch);
+  }
+  if (parts.length === 2 && M === "DELETE") { // owner stops sharing, or the partner stops watching
+    await env.DB.prepare("DELETE FROM partners WHERE id = ?").bind(id).run();
     return json({ ok: true }, 200, ch);
   }
   return json({ error: "not found" }, 404, ch);
@@ -528,9 +598,14 @@ export default {
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
           await nudgeInit(env); await env.DB.prepare("DELETE FROM nudge_use WHERE sub = ?").bind(s.sub).run();
+          await partnersInit(env); await env.DB.prepare("DELETE FROM partners WHERE owner = ? OR viewer = ?").bind(s.sub, s.sub).run();
           await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
           return json({ ok: true }, 200, ch);
         }
+      }
+      if (path === "/partners" || path.startsWith("/partners/")) {
+        if (!s) return json({ error: "signed out" }, 401, ch);
+        return await partners(env, req, s, path, ch);
       }
       if (path === "/teams" || path.startsWith("/teams/")) {
         if (!s) return json({ error: "signed out" }, 401, ch);
