@@ -460,10 +460,13 @@ export default {
         if (!s) return json({ error: "signed out" }, 401, ch);
         return await pushRoutes(env, req, s, path, ch);
       }
-      if (path === "/" || path === "/health") return json({ ok: true, service: "schedule-io-sync" }, 200, ch);
+      if (path === "/" || path === "/health") // setup check: says only whether each setting exists, never its value
+        return json({ ok: true, service: "schedule-io-sync", setup: { db: !!env.DB, google: !!env.GOOGLE_CLIENT_ID, origin: !!env.APP_ORIGIN, session: !!env.SESSION_SECRET, data: !!env.DATA_KEY, push: !!globalThis.crypto?.subtle } }, 200, ch);
       return json({ error: "not found" }, 404, ch);
     } catch (e) {
       if (e && e.status === 413) return json({ error: "too large" }, 413, ch);
+      console.error("server error", req.method, path.replace(/\/teams\/[^/]+/, "/teams/:id"), e && e.name, String(e && e.message || "").slice(0, 200)); // no user data
+      if (path.startsWith("/push")) return json({ error: "server error", code: String(e && e.name || "") + ": " + String(e && e.message || "").slice(0, 120) }, 500, ch);
       if (path === "/auth/callback") return page("Sign-in error", "<h1>Sign-in didn't work</h1><p>Return to Hourline and try again.</p>", 400);
       return json({ error: "server error" }, 500, ch);
     }
