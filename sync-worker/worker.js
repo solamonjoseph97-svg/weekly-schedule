@@ -206,7 +206,8 @@ async function vapidKeys(env) {
     await env.DB.prepare("INSERT OR IGNORE INTO conf (k, v) VALUES ('vapid', ?)").bind(await seal(env, "vapid", { pub, jwk })).run();
     row = await env.DB.prepare("SELECT v FROM conf WHERE k = 'vapid'").first(); // another request may have won the race: use theirs
   }
-  const { doc } = await open(env, "vapid", row.v);
+  let doc; try { doc = (await open(env, "vapid", row.v)).doc; }
+  catch { await env.DB.prepare("DELETE FROM conf WHERE k = 'vapid'").run(); VK = null; return vapidKeys(env); } // data key was replaced: make a new signing key
   VK = { pub: doc.pub, key: await crypto.subtle.importKey("jwk", doc.jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]) };
   return VK;
 }
@@ -419,7 +420,7 @@ export default {
         if (req.method === "GET") {
           const row = await env.DB.prepare("SELECT rev, doc, updated FROM docs WHERE sub = ?").bind(s.sub).first();
           if (!row) return json({ rev: 0, doc: null }, 200, ch);
-          const o = await open(env, s.sub, row.doc);
+          let o; try { o = await open(env, s.sub, row.doc); } catch { return json({ rev: row.rev, doc: null, unreadable: true }, 200, ch); } // key was replaced: device re-uploads its copy
           if (o.stale) await env.DB.prepare("UPDATE docs SET doc = ? WHERE sub = ? AND rev = ?").bind(await seal(env, s.sub, o.doc), s.sub, row.rev).run(); // re-encrypt under the new key
           return json({ rev: row.rev, doc: o.doc, updated: row.updated }, 200, ch);
         }
@@ -436,7 +437,8 @@ export default {
             : await env.DB.prepare("INSERT OR IGNORE INTO docs (sub, rev, doc, updated) VALUES (?, 1, ?, ?)").bind(s.sub, box, now).run();
           if (!r.meta.changes) {
             const row = await env.DB.prepare("SELECT rev, doc FROM docs WHERE sub = ?").bind(s.sub).first();
-            return json({ error: "conflict", rev: row ? row.rev : 0, doc: row ? (await open(env, s.sub, row.doc)).doc : null }, 409, ch);
+            let cdoc = null; if (row) try { cdoc = (await open(env, s.sub, row.doc)).doc; } catch { cdoc = null; }
+            return json({ error: "conflict", rev: row ? row.rev : 0, doc: cdoc }, 409, ch);
           }
           return json({ rev: baseRev ? baseRev + 1 : 1, updated: now }, 200, ch);
         }
