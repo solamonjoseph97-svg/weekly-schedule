@@ -6,9 +6,12 @@ name = "schedule-io-sync"
 main = "worker.js"
 compatibility_date = "2026-10-19"
 workers_dev = true
-keep_vars = true            # keep APP_ORIGIN, GOOGLE_CLIENT_ID and any LOCKDOWN switch set in the dashboard
+keep_vars = true            # keep GOOGLE_CLIENT_ID and any LOCKDOWN switch set in the dashboard
 
 routes = [ { pattern = "api.hourline.io", custom_domain = true } ]
+
+[vars]
+APP_ORIGIN = "https://hourline.io"
 
 [[d1_databases]]
 binding = "DB"
