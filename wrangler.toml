@@ -1,0 +1,27 @@
+# Cloudflare deploy settings for the Hourline sync service (schedule-io-sync), used when the build runs from the
+# repository root. Without this file, a build from the root publishes the old Weekly Schedule web page over the sync
+# service (that happened on 2026-10-27). sync-worker/wrangler.toml holds the same settings for builds run from that folder;
+# keep the two in sync.
+# Daily improvement runs never push to main: they push to `worker-next`, and Nathaniel deploys by merging on GitHub.
+name = "schedule-io-sync"
+main = "sync-worker/worker.js"
+compatibility_date = "2026-10-19"
+workers_dev = true
+keep_vars = true            # keep GOOGLE_CLIENT_ID and any LOCKDOWN switch set in the dashboard
+
+routes = [ { pattern = "api.hourline.io", custom_domain = true } ]
+
+[vars]
+APP_ORIGIN = "https://hourline.io"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "schedule-io"
+database_id = "838137a3-0443-4f2e-893d-28d159314218"
+
+[observability]
+enabled = true
+
+# Every minute: send notifications that are due (free plan includes Cron Triggers).
+[triggers]
+crons = ["* * * * *"]
