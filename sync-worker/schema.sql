@@ -11,3 +11,5 @@ CREATE TABLE IF NOT EXISTS push (id TEXT PRIMARY KEY, sub TEXT NOT NULL, box TEX
 CREATE INDEX IF NOT EXISTS push_next ON push (next_at);
 CREATE INDEX IF NOT EXISTS push_by_sub ON push (sub);
 CREATE TABLE IF NOT EXISTS conf (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+-- Ella smart conversation: only a per-day message count per account (created on first use too)
+CREATE TABLE IF NOT EXISTS ella_use (sub TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (sub, day));

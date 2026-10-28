@@ -12,7 +12,8 @@
 //
 // Settings (Worker → Settings → Variables and secrets):
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
-//   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop)
+//   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop),
+//   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation), ELLA_DAILY (text, messages per account per day, default 40)
 // Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf (created on
 // first use, also in schema.sql). Cron Trigger every minute sends due notifications (wrangler.toml [triggers]).
 
@@ -315,6 +316,45 @@ async function runPush(env, now = Date.now()) {
   return { sent, dropped, rows: rows.length };
 }
 
+
+// ---- Ella smart conversation (optional). The app answers most things on the device; only questions it can't handle come here.
+// Needs ANTHROPIC_API_KEY (secret). Limits: 40 messages per account per day (ELLA_DAILY to change), 20 a minute per IP,
+// small inputs. Nothing about the conversation is stored: only a per-day message count.
+const ELLA_TONES = { friendly: "friendly and direct", respect: "direct and respectful", kind: "kind and gentle but still direct", neutral: "neutral and factual", strict: "strict, demanding, no excuses", cold: "blunt and cold, very few words", brutal: "brutally honest and direct, meant to shock someone out of apathy (attack excuses, never the person)" };
+let ellaReady = false;
+// the API wants user first and roles alternating: drop leading replies, join back-to-back turns from the same side
+function ellaTurns(list) { const out = []; for (const m of list) { if (!out.length && m.role !== "user") continue; const last = out[out.length - 1]; if (last && last.role === m.role) last.content += "\n" + m.content; else out.push({ ...m }); } return out; }
+async function ellaInit(env) { if (ellaReady) return; await env.DB.prepare("CREATE TABLE IF NOT EXISTS ella_use (sub TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (sub, day))").run(); ellaReady = true; }
+async function ellaRoute(env, req, s, ch) {
+  if (!env.ANTHROPIC_API_KEY) return json({ error: "not set up" }, 503, ch);
+  if (limited(req, 20, "ella")) return json({ error: "slow down" }, 429, ch);
+  const text = await req.text(); if (text.length > 12000) return json({ error: "too large" }, 413, ch);
+  let b; try { b = JSON.parse(text); } catch { return json({ error: "bad request" }, 400, ch); }
+  const q = String(b && b.q || "").trim().slice(0, 300); if (!q) return json({ error: "bad request" }, 400, ch);
+  const hist = (Array.isArray(b.hist) ? b.hist : []).slice(-8).map(t => ({ role: t && t.r === "u" ? "user" : "assistant", content: String(t && t.t || "").slice(0, 400) })).filter(t => t.content);
+  const ctx = JSON.stringify(b.ctx || {}).slice(0, 5000), tone = ELLA_TONES[b.tone] || ELLA_TONES.friendly;
+  await ellaInit(env);
+  const day = new Date().toISOString().slice(0, 10), max = +env.ELLA_DAILY || 40;
+  const row = await env.DB.prepare("SELECT n FROM ella_use WHERE sub = ? AND day = ?").bind(s.sub, day).first();
+  if (row && row.n >= max) return json({ error: "daily limit" }, 429, ch);
+  await env.DB.prepare("INSERT INTO ella_use (sub, day, n) VALUES (?, ?, 1) ON CONFLICT(sub, day) DO UPDATE SET n = n + 1").bind(s.sub, day).run();
+  await env.DB.prepare("DELETE FROM ella_use WHERE day < ?").bind(new Date(Date.now() - 3 * 864e5).toISOString().slice(0, 10)).run();
+  const system = `You are Ella (short for Candela), a productivity and sales coach inside Hourline, a scheduling app for insurance and sales agents. Personality: ${tone}.
+Rules: Reply in at most 3 short sentences (under 60 words). Plain text, no markdown, no lists. Use the user's data below when relevant; never invent numbers, names or appointments.
+Stay on coaching: schedules, habits, prospecting, follow-ups, goals, motivation, sales conversations. For anything else (medical, legal, tax, investment advice, politics, personal crises), say briefly that you're a productivity coach and suggest the right kind of professional; if someone mentions self-harm or crisis, gently point them to 988 (US) or local emergency services.
+You can't take actions from here; if they want to book, add a prospect or change a setting, tell them the exact phrase to say, e.g. "book an appointment with Sam Friday at 3".
+Never shame the person. Never claim to be human.
+User data (JSON): ${ctx}`;
+  let r;
+  try {
+    r = await fetch(env.ANTHROPIC_URL || "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: env.ELLA_MODEL || "claude-haiku-5-5", max_tokens: 220, system, messages: ellaTurns([...hist, { role: "user", content: q }]) }) });
+  } catch { return json({ error: "ai unavailable" }, 502, ch); }
+  if (!r.ok) return json({ error: "ai unavailable" }, 502, ch);
+  const out = await r.json().catch(() => null), reply = out && Array.isArray(out.content) ? out.content.filter(c => c.type === "text").map(c => c.text).join(" ").trim().slice(0, 600) : "";
+  return json(reply ? { text: reply, left: Math.max(0, max - ((row ? row.n : 0) + 1)) } : { error: "ai unavailable" }, reply ? 200 : 502, ch);
+}
+
 async function makeSession(env, sub, email, ver) {
   const body = b64u(enc.encode(JSON.stringify({ sub, email, ver, exp: Date.now() + SESSION_DAYS * 864e5 })));
   return body + "." + b64u(await crypto.subtle.sign("HMAC", await hmacKey(env), enc.encode(body)));
@@ -449,6 +489,7 @@ export default {
           await env.DB.prepare("DELETE FROM snaps WHERE sub = ?").bind(s.sub).run();
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
+          await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
           await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
           return json({ ok: true }, 200, ch);
         }
@@ -457,6 +498,7 @@ export default {
         if (!s) return json({ error: "signed out" }, 401, ch);
         return await teams(env, req, s, path, ch);
       }
+      if (path === "/ella" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await ellaRoute(env, req, s, ch); }
       if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
       if (path === "/push" || path.startsWith("/push/")) {
         if (!s) return json({ error: "signed out" }, 401, ch);
