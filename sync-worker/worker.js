@@ -13,8 +13,10 @@
 // Settings (Worker → Settings → Variables and secrets):
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
 //   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop),
-//   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation), ELLA_DAILY (text, messages per account per day, default 40)
-// Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf (created on
+//   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation and the event finder), ELLA_DAILY (text, messages per account per day, default 40)
+//   EVENTS_DAILY (text, event searches per account per day, default 5), WEB_SEARCH_TOOL (text, default web_search_20250305)
+//   GEOCODE_URL (text, reverse-geocoding endpoint, default OpenStreetMap Nominatim), GEOCODE_OFF (text "1" = no addresses on check-in proof)
+// Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf, nudge_use; partners (created on
 // first use, also in schema.sql). Cron Trigger every minute sends due notifications (wrangler.toml [triggers]).
 
 const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -85,9 +87,76 @@ async function openT(env, team, sub, box) {
   try { return { doc: await tryKey(env.DATA_KEY), stale: false }; } catch (e) { if (!env.DATA_KEY_OLD) throw e; }
   return { doc: await tryKey(env.DATA_KEY_OLD), stale: true };
 }
+// Check-in proof (team members): a live camera photo and where it was taken, sealed per member like snaps.
+// Only the team lead can read them. Photos and places are deleted after PROOF_DAYS, when the member leaves, or with their data.
+const PROOF_DAYS = 30, PROOF_MAX = 600_000, PROOF_KEY = /^[A-Za-z0-9_-]{1,60}\|\d{4}-\d{2}-\d{2}$/;
+let proofReady = false;
+async function proofInit(env) { if (proofReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS proofs (id TEXT PRIMARY KEY, team TEXT NOT NULL, sub TEXT NOT NULL, k TEXT NOT NULL, at INTEGER NOT NULL, meta TEXT NOT NULL, photo TEXT, created INTEGER NOT NULL)").run();
+  await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS proofs_one ON proofs (team, sub, k)").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS proofs_age ON proofs (created)").run(); proofReady = true; }
+// Turns a check-in's coordinates into a readable place ("The Domain, 11410 Century Oaks Ter, Austin") for the lead.
+// Uses OpenStreetMap's Nominatim from the server (only the coordinates are sent, never who you are), cached ~11 m apart.
+// GEOCODE_URL can point at another provider later; GEOCODE_OFF=1 turns it off.
+async function placeName(env, lat, lng) {
+  if (env.GEOCODE_OFF === "1") return "";
+  const k = lat.toFixed(4) + "," + lng.toFixed(4);
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS geo_cache (k TEXT PRIMARY KEY, place TEXT NOT NULL, at INTEGER NOT NULL)").run();
+  const hit = await env.DB.prepare("SELECT place FROM geo_cache WHERE k = ?").bind(k).first(); if (hit) return hit.place;
+  try {
+    const u = new URL(env.GEOCODE_URL || "https://nominatim.openstreetmap.org/reverse"); u.searchParams.set("format", "jsonv2"); u.searchParams.set("lat", String(lat)); u.searchParams.set("lon", String(lng)); u.searchParams.set("zoom", "18"); u.searchParams.set("addressdetails", "1");
+    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 3500);
+    const r = await fetch(u, { headers: { "user-agent": "Hourline/1.0 (+https://hourline.io)", "accept-language": "en" }, signal: ctl.signal }); clearTimeout(tm);
+    if (!r.ok) return "";
+    const j = await r.json(), a = j.address || {};
+    const name = j.name && !/^\d/.test(j.name) ? j.name : (a.shop || a.amenity || a.building || a.office || a.leisure || "");
+    const street = [a.house_number, a.road].filter(Boolean).join(" "), city = a.city || a.town || a.village || a.suburb || a.county || "";
+    const place = [name, street, [city, a.state ? (a["ISO3166-2-lvl4"] || "").split("-")[1] || a.state : ""].filter(Boolean).join(", ")].filter(Boolean).join(" · ").slice(0, 140);
+    if (place) await env.DB.prepare("INSERT INTO geo_cache (k, place, at) VALUES (?, ?, ?) ON CONFLICT(k) DO NOTHING").bind(k, place, Date.now()).run();
+    return place;
+  } catch { return ""; }
+}
+async function proofRoutes(env, req, s, id, me, parts, ch) {
+  const M = req.method, lead = me.role === "lead", now = Date.now(); await proofInit(env);
+  if (parts.length === 4 && M === "PUT") { // a member saves the proof for one check-in (re-taking replaces it)
+    if (lead) return json({ error: "forbidden" }, 403, ch);
+    if (limited(req, 30, "proof")) return json({ error: "slow down" }, 429, ch);
+    const k = decodeURIComponent(parts[3]); if (!PROOF_KEY.test(k)) return json({ error: "bad request" }, 400, ch);
+    const t = await req.text(); if (t.length > PROOF_MAX) return json({ error: "too large" }, 413, ch);
+    let b; try { b = JSON.parse(t); } catch { return json({ error: "bad request" }, 400, ch); }
+    const at = +b.at, photo = typeof b.photo === "string" ? b.photo : "";
+    if (!Number.isFinite(at) || at > now + 5 * 60000 || at < now - 3 * 864e5) return json({ error: "bad time" }, 400, ch);
+    if (photo && !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(photo)) return json({ error: "bad photo" }, 400, ch);
+    const num = (v, lo, hi) => Number.isFinite(+v) && +v >= lo && +v <= hi ? Math.round(+v * 1e6) / 1e6 : null;
+    const lat = num(b.lat, -90, 90), lng = num(b.lng, -180, 180), acc = num(b.acc, 0, 100000);
+    const place = lat != null && lng != null ? await placeName(env, lat, lng) : "";
+    const meta = { at, title: String(b.title || "").slice(0, 60), place, lat: lat != null && lng != null ? lat : null, lng: lat != null && lng != null ? lng : null, acc: lat != null ? acc : null,
+      why: photo ? "" : String(b.why || "no photo").slice(0, 60), locWhy: lat != null ? "" : String(b.locWhy || "no location").slice(0, 60), photo: !!photo };
+    const ex = await env.DB.prepare("SELECT id FROM proofs WHERE team = ? AND sub = ? AND k = ?").bind(id, s.sub, k).first();
+    const pid = ex ? ex.id : "pf_" + rnd(16);
+    await env.DB.prepare("INSERT INTO proofs (id, team, sub, k, at, meta, photo, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(team, sub, k) DO UPDATE SET at = excluded.at, meta = excluded.meta, photo = excluded.photo, created = excluded.created")
+      .bind(pid, id, s.sub, k, at, await sealT(env, id, s.sub, meta), photo ? await sealT(env, id, s.sub, { photo }) : null, now).run();
+    return json({ id: pid }, 200, ch);
+  }
+  if (!lead) return json({ error: "forbidden" }, 403, ch);
+  if (parts.length === 3 && M === "GET") { // lead: proof details for the last N days (no photos, just what each check-in carried)
+    const days = Math.min(PROOF_DAYS, Math.max(1, +new URL(req.url).searchParams.get("days") || 7));
+    const rows = (await env.DB.prepare("SELECT p.id AS id, p.sub AS sub, p.k AS k, p.meta AS meta, m.mid AS mid FROM proofs p JOIN members m ON m.team = p.team AND m.sub = p.sub WHERE p.team = ? AND p.created > ? ORDER BY p.at DESC LIMIT 2000").bind(id, now - days * 864e5).all()).results || [];
+    const out = [];
+    for (const r of rows) { try { out.push({ id: r.id, mid: r.mid, k: r.k, ...(await openT(env, id, r.sub, r.meta)).doc }); } catch { } }
+    return json({ proofs: out }, 200, ch);
+  }
+  if (parts.length === 5 && parts[4] === "photo" && M === "GET") { // lead: one photo
+    const r = await env.DB.prepare("SELECT sub, photo FROM proofs WHERE team = ? AND id = ?").bind(id, parts[3]).first();
+    if (!r || !r.photo) return json({ error: "not found" }, 404, ch);
+    try { return json({ photo: (await openT(env, id, r.sub, r.photo)).doc.photo }, 200, { ...ch, "cache-control": "no-store" }); } catch { return json({ error: "not found" }, 404, ch); }
+  }
+  return json({ error: "not found" }, 404, ch);
+}
 async function memberOf(env, team, sub) { return env.DB.prepare("SELECT role, mid FROM members WHERE team = ? AND sub = ?").bind(team, sub).first(); }
 async function dropTeam(env, team) {
   await env.DB.prepare("DELETE FROM snaps WHERE team = ?").bind(team).run();
+  await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM members WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(team).run();
 }
@@ -126,6 +195,7 @@ async function teams(env, req, s, path, ch) {
   const me = await memberOf(env, id, s.sub);
   if (!me) return json({ error: "not found" }, 404, ch); // never reveal whether a team exists to outsiders
   const lead = me.role === "lead";
+  if (parts[2] === "proofs") return proofRoutes(env, req, s, id, me, parts, ch);
   if (parts.length === 2 && M === "GET") { // lead only: every member's latest shared copy
     if (!lead) return json({ error: "forbidden" }, 403, ch);
     const t = await env.DB.prepare("SELECT name FROM teams WHERE id = ?").bind(id).first();
@@ -150,6 +220,38 @@ async function teams(env, req, s, path, ch) {
     await env.DB.prepare("DELETE FROM snaps WHERE team = ? AND sub = ?").bind(id, s.sub).run();
     return json({ ok: true }, 200, ch);
   }
+  if (parts.length === 3 && parts[2] === "nudge" && M === "POST") { // lead: "time to check in" on members' lock screens
+    if (!lead) return json({ error: "forbidden" }, 403, ch);
+    if (limited(req, 8, "nudge")) return json({ error: "slow down" }, 429, ch);
+    const b = await body();
+    const mids = Array.isArray(b.mids) ? [...new Set(b.mids.map(String))] : [];
+    if (!mids.length || mids.length > NUDGE_BATCH) return json({ error: "bad request" }, 400, ch);
+    await pushInit(env); await nudgeInit(env);
+    const day = new Date(now).toISOString().slice(0, 10);
+    await env.DB.prepare("DELETE FROM nudge_use WHERE day < ?").bind(day).run();
+    const t = await env.DB.prepare("SELECT name FROM teams WHERE id = ?").bind(id).first();
+    // Fixed wording: a lead can't put their own text on someone's lock screen. No schedule details are included.
+    const msg = { title: String(t && t.name || "Your team").slice(0, 40), body: "Your team lead is asking for today's check-in. Tap to check in.", url: "/app/#checkin", tag: "nudge" };
+    const out = { sent: [], none: [], capped: [] };
+    for (const mid of mids) {
+      const m = await env.DB.prepare("SELECT sub FROM members WHERE team = ? AND mid = ?").bind(id, mid).first();
+      if (!m || m.sub === s.sub) continue;
+      const used = await env.DB.prepare("SELECT n FROM nudge_use WHERE team = ? AND sub = ? AND day = ?").bind(id, m.sub, day).first();
+      if (used && used.n >= NUDGE_DAILY) { out.capped.push(mid); continue; }
+      const devs = (await env.DB.prepare("SELECT id, box FROM push WHERE sub = ? ORDER BY updated DESC LIMIT ?").bind(m.sub, NUDGE_DEVICES).all()).results || [];
+      let n = 0;
+      for (const d of devs) {
+        let doc; try { doc = (await open(env, m.sub, d.box)).doc; } catch { continue; }
+        let st = 0; try { st = await sendPush(env, doc, msg); } catch { st = 0; }
+        if (st === 404 || st === 410) await env.DB.prepare("DELETE FROM push WHERE id = ?").bind(d.id).run();
+        else if (st >= 200 && st < 300) n++;
+      }
+      if (!n) { out.none.push(mid); continue; } // no phone with notifications on: the app offers a text instead
+      await env.DB.prepare("INSERT INTO nudge_use (team, sub, day, n) VALUES (?, ?, ?, 1) ON CONFLICT(team, sub, day) DO UPDATE SET n = n + 1").bind(id, m.sub, day).run();
+      out.sent.push(mid);
+    }
+    return json(out, 200, ch);
+  }
   if (parts.length === 3 && parts[2] === "invite" && M === "POST") { // lead: new invite code; old links stop working
     if (!lead) return json({ error: "forbidden" }, 403, ch);
     const invite = rnd(24);
@@ -168,12 +270,83 @@ async function teams(env, req, s, path, ch) {
     const self = target.sub === s.sub;
     if (!(self || lead) || (self && lead)) return json({ error: "forbidden" }, 403, ch); // a lead deletes the team instead
     await env.DB.prepare("DELETE FROM snaps WHERE team = ? AND sub = ?").bind(id, target.sub).run();
+    await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE team = ? AND sub = ?").bind(id, target.sub).run();
     await env.DB.prepare("DELETE FROM members WHERE team = ? AND sub = ?").bind(id, target.sub).run();
     return json({ ok: true }, 200, ch);
   }
   if (parts.length === 2 && M === "DELETE") { // lead deletes the team and every shared copy in it
     if (!lead) return json({ error: "forbidden" }, 403, ch);
     await dropTeam(env, id);
+    return json({ ok: true }, 200, ch);
+  }
+  return json({ error: "not found" }, 404, ch);
+}
+
+// ---- accountability partners (one way): the owner shares chosen categories with one partner per invite link ----
+// The partner sees only what the owner's app sends (same shape as a team copy); the owner never sees anything of the
+// partner's. Invite links work once. Names and the shared copy are sealed per partner link, like team copies.
+const MAX_PARTNERS = 5, MAX_WATCHING = 20, partnerIdOk = id => /^pt_[A-Za-z0-9_-]{20,40}$/.test(id || "");
+let partnersReady = false;
+async function partnersInit(env) {
+  if (partnersReady) return;
+  for (const q of ["CREATE TABLE IF NOT EXISTS partners (id TEXT PRIMARY KEY, owner TEXT NOT NULL, viewer TEXT, invite_hash TEXT, names TEXT, doc TEXT, updated INTEGER, created INTEGER NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS partners_by_owner ON partners (owner)", "CREATE INDEX IF NOT EXISTS partners_by_viewer ON partners (viewer)"]) await env.DB.prepare(q).run();
+  partnersReady = true;
+}
+const pName = v => String(v || "").trim().slice(0, 40);
+async function pNames(env, r) { if (!r.names) return {}; try { return (await openT(env, r.id, "names", r.names)).doc || {}; } catch { return {}; } }
+async function partners(env, req, s, path, ch) {
+  await partnersInit(env);
+  const parts = path.split("/").filter(Boolean), M = req.method, now = Date.now();
+  const body = async () => { const t = await req.text(); if (t.length > MAX_SNAP) throw Object.assign(new Error("too large"), { status: 413 }); return t ? JSON.parse(t) : {}; };
+  if (parts.length === 1 && M === "GET") {
+    const mine = (await env.DB.prepare("SELECT id, viewer, names, created FROM partners WHERE owner = ?").bind(s.sub).all()).results || [];
+    const shared = (await env.DB.prepare("SELECT id, owner, names, doc, updated FROM partners WHERE viewer = ?").bind(s.sub).all()).results || [];
+    const out = { mine: [], shared: [] };
+    for (const r of mine) out.mine.push({ id: r.id, accepted: !!r.viewer, partner: r.viewer ? pName((await pNames(env, r)).viewer) : "", created: r.created });
+    for (const r of shared) {
+      let doc = null;
+      if (r.doc) { try { const o = await openT(env, r.id, r.owner, r.doc); doc = o.doc; if (o.stale) await env.DB.prepare("UPDATE partners SET doc = ? WHERE id = ? AND updated = ?").bind(await sealT(env, r.id, r.owner, doc), r.id, r.updated).run(); } catch { doc = null; } }
+      out.shared.push({ id: r.id, name: pName((await pNames(env, r)).owner), updated: r.updated || null, doc });
+    }
+    return json(out, 200, ch);
+  }
+  if (parts.length === 1 && M === "POST") { // owner makes an invite link
+    if (limited(req, 20, "partners")) return json({ error: "slow down" }, 429, ch);
+    const b = await body();
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM partners WHERE owner = ?").bind(s.sub).first();
+    if (n && n.n >= MAX_PARTNERS) return json({ error: "partner limit" }, 403, ch);
+    const id = "pt_" + rnd(18), invite = rnd(24);
+    await env.DB.prepare("INSERT INTO partners (id, owner, invite_hash, names, created) VALUES (?, ?, ?, ?, ?)").bind(id, s.sub, await sha256(invite), await sealT(env, id, "names", { owner: pName(b.name) }), now).run();
+    return json({ id, invite }, 200, ch);
+  }
+  if (parts.length === 2 && parts[1] === "accept" && M === "POST") {
+    if (limited(req, 20, "partners")) return json({ error: "slow down" }, 429, ch);
+    const b = await body(), id = String(b.id || ""), inv = String(b.invite || "");
+    const r = partnerIdOk(id) ? await env.DB.prepare("SELECT * FROM partners WHERE id = ?").bind(id).first() : null;
+    if (r && r.viewer === s.sub) return json({ id, name: pName((await pNames(env, r)).owner) }, 200, ch); // already accepted
+    if (!r || r.viewer || !r.invite_hash || inv.length < 20 || (await sha256(inv)) !== r.invite_hash) return json({ error: "invite not valid" }, 403, ch);
+    if (r.owner === s.sub) return json({ error: "own invite" }, 400, ch);
+    const w = await env.DB.prepare("SELECT COUNT(*) AS n FROM partners WHERE viewer = ?").bind(s.sub).first();
+    if (w && w.n >= MAX_WATCHING) return json({ error: "partner limit" }, 403, ch);
+    const names = { ...(await pNames(env, r)), viewer: pName(b.name) };
+    const u = await env.DB.prepare("UPDATE partners SET viewer = ?, invite_hash = NULL, names = ? WHERE id = ? AND viewer IS NULL").bind(s.sub, await sealT(env, id, "names", names), id).run();
+    if (!u.meta.changes) return json({ error: "invite not valid" }, 403, ch);
+    return json({ id, name: pName(names.owner) }, 200, ch);
+  }
+  const id = parts[1];
+  const r = partnerIdOk(id) ? await env.DB.prepare("SELECT id, owner, viewer FROM partners WHERE id = ?").bind(id).first() : null;
+  if (!r || (r.owner !== s.sub && r.viewer !== s.sub)) return json({ error: "not found" }, 404, ch);
+  if (parts.length === 3 && parts[2] === "snap" && M === "PUT") { // owner publishes what this partner may see
+    if (r.owner !== s.sub) return json({ error: "forbidden" }, 403, ch);
+    if (limited(req, 30, "psnap")) return json({ error: "slow down" }, 429, ch);
+    const b = await body();
+    if (!b.doc || typeof b.doc !== "object") return json({ error: "bad request" }, 400, ch);
+    await env.DB.prepare("UPDATE partners SET doc = ?, updated = ? WHERE id = ?").bind(await sealT(env, id, r.owner, b.doc), now, id).run();
+    return json({ updated: now }, 200, ch);
+  }
+  if (parts.length === 2 && M === "DELETE") { // owner stops sharing, or the partner stops watching
+    await env.DB.prepare("DELETE FROM partners WHERE id = ?").bind(id).run();
     return json({ ok: true }, 200, ch);
   }
   return json({ error: "not found" }, 404, ch);
@@ -260,6 +433,11 @@ function pushQueue(q, now) {
   return out.sort((a, b) => a.at - b.at);
 }
 const nextAt = q => q.length ? q[0].at : null;
+// Leader nudges: at most NUDGE_DAILY per member per team per day, NUDGE_BATCH members per request (keeps each request
+// well under Cloudflare's outgoing-request limit; the app sends larger teams in batches), newest NUDGE_DEVICES phones each.
+const NUDGE_DAILY = 2, NUDGE_BATCH = 15, NUDGE_DEVICES = 3;
+let nudgeReady = false;
+async function nudgeInit(env) { if (nudgeReady) return; await env.DB.prepare("CREATE TABLE IF NOT EXISTS nudge_use (team TEXT NOT NULL, sub TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (team, sub, day))").run(); nudgeReady = true; }
 async function pushRoutes(env, req, s, path, ch) {
   await pushInit(env);
   const now = Date.now(), b = await req.json().catch(() => null), t = pushTarget(env, b);
@@ -353,6 +531,66 @@ User data (JSON): ${ctx}`;
   if (!r.ok) return json({ error: "ai unavailable" }, 502, ch);
   const out = await r.json().catch(() => null), reply = out && Array.isArray(out.content) ? out.content.filter(c => c.type === "text").map(c => c.text).join(" ").trim().slice(0, 600) : "";
   return json(reply ? { text: reply, left: Math.max(0, max - ((row ? row.n : 0) + 1)) } : { error: "ai unavailable" }, reply ? 200 : 502, ch);
+}
+
+// Ella's event finder: in-person networking events near a city, found with the AI's web search tool.
+// Privacy: only the city/region the person typed is sent (no name, schedule, prospects or location coordinates).
+// Results are cached per city + window for 12 hours and shared (they hold no personal data). Searches are limited per account.
+let evReady = false;
+async function evInit(env) { if (evReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS events_cache (k TEXT PRIMARY KEY, at INTEGER NOT NULL, body TEXT NOT NULL)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS events_use (sub TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (sub, day))").run(); evReady = true; }
+const EV_CITY = /^[A-Za-z][A-Za-z .,'-]{1,59}$/, EV_HHMM = /^([01]\d|2[0-3]):[0-5]\d$/, EV_ISO = /^\d{4}-\d{2}-\d{2}$/;
+const EV_FOCUS = { general: "business networking events, mixers and professional meetups", insurance: "business networking, chamber of commerce, small-business owner, real-estate, financial-services and community events where an insurance or financial agent can meet prospects", sales: "business networking, sales, entrepreneur and small-business events" };
+function evClean(list, from, to) {
+  const out = [];
+  for (const x of Array.isArray(list) ? list : []) {
+    if (!x || typeof x !== "object") continue;
+    const title = String(x.title || "").trim().slice(0, 90), date = String(x.date || "");
+    if (!title || !EV_ISO.test(date) || date < from || date > to) continue;
+    let url = String(x.url || "").trim(); try { const u = new URL(url); if (u.protocol !== "https:") url = ""; else url = u.href.slice(0, 300); } catch { url = ""; }
+    if (!url) continue; // no real https event page = can't be checked, so it isn't shown
+    out.push({ title, date, start: EV_HHMM.test(x.start) ? x.start : "", end: EV_HHMM.test(x.end) ? x.end : "", venue: String(x.venue || "").slice(0, 80), address: String(x.address || "").slice(0, 120),
+      cost: String(x.cost || "").slice(0, 30), url, why: String(x.why || "").slice(0, 140) });
+    if (out.length >= 12) break;
+  }
+  return out.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+}
+async function eventsRoute(env, req, s, ch) {
+  if (!env.ANTHROPIC_API_KEY) return json({ error: "not set up" }, 503, ch);
+  if (limited(req, 10, "events")) return json({ error: "slow down" }, 429, ch);
+  const text = await req.text(); if (text.length > 2000) return json({ error: "too large" }, 413, ch);
+  let b; try { b = JSON.parse(text); } catch { return json({ error: "bad request" }, 400, ch); }
+  const city = String(b && b.city || "").trim().replace(/\s+/g, " "), region = String(b && b.region || "").trim().slice(0, 40), focus = EV_FOCUS[b && b.focus] ? b.focus : "insurance";
+  const days = [7, 14, 30].includes(+(b && b.days)) ? +b.days : 14, tz = /^[A-Za-z_]+\/[A-Za-z_]+$/.test(b && b.tz || "") ? b.tz : "America/Chicago";
+  if (!EV_CITY.test(city) || (region && !EV_CITY.test(region))) return json({ error: "bad city" }, 400, ch);
+  await evInit(env);
+  const from = new Date().toISOString().slice(0, 10), to = new Date(Date.now() + days * 864e5).toISOString().slice(0, 10);
+  const key = [city.toLowerCase(), region.toLowerCase(), focus, days, from].join("|");
+  const hit = await env.DB.prepare("SELECT at, body FROM events_cache WHERE k = ?").bind(key).first();
+  if (hit && Date.now() - hit.at < 12 * 3600e3) return json({ events: JSON.parse(hit.body), cached: true }, 200, ch);
+  const day = from, max = +env.EVENTS_DAILY || 5;
+  const row = await env.DB.prepare("SELECT n FROM events_use WHERE sub = ? AND day = ?").bind(s.sub, day).first();
+  if (row && row.n >= max) return json({ error: "daily limit" }, 429, ch);
+  await env.DB.prepare("INSERT INTO events_use (sub, day, n) VALUES (?, ?, 1) ON CONFLICT(sub, day) DO UPDATE SET n = n + 1").bind(s.sub, day).run();
+  await env.DB.prepare("DELETE FROM events_use WHERE day < ?").bind(new Date(Date.now() - 3 * 864e5).toISOString().slice(0, 10)).run();
+  await env.DB.prepare("DELETE FROM events_cache WHERE at < ?").bind(Date.now() - 2 * 864e5).run();
+  const place = city + (region ? ", " + region : "");
+  const system = `You find real, upcoming, in-person events for a sales professional. Use web search. Only include events you found on a real web page with a specific date between ${from} and ${to} in or near ${place}. Never invent events, dates, venues or links.
+Reply with ONLY a JSON array (no prose, no markdown), up to 10 items, each: {"title":"","date":"YYYY-MM-DD","start":"HH:MM" (24h, or ""),"end":"HH:MM" or "","venue":"","address":"","cost":"Free" or price or "","url":"https link to the event page","why":"one short sentence on why it's good for meeting prospects"}. If you find nothing, reply [].`;
+  let r;
+  try {
+    r = await fetch(env.ANTHROPIC_URL || "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: env.EVENTS_MODEL || env.ELLA_MODEL || "claude-haiku-5-5", max_tokens: 1800, system,
+        tools: [{ type: env.WEB_SEARCH_TOOL || "web_search_20250305", name: "web_search", max_uses: 4, user_location: { type: "approximate", city, ...(region ? { region } : {}), country: "US", timezone: tz } }],
+        messages: [{ role: "user", content: `Find ${EV_FOCUS[focus]} in ${place} from ${from} to ${to}. Prefer Eventbrite, Meetup, chamber of commerce and venue pages.` }] }) });
+  } catch { return json({ error: "ai unavailable" }, 502, ch); }
+  if (!r.ok) return json({ error: "ai unavailable" }, 502, ch);
+  const out = await r.json().catch(() => null), txt = out && Array.isArray(out.content) ? out.content.filter(c => c.type === "text").map(c => c.text).join("\n") : "";
+  const m = txt.match(/\[[\s\S]*\]/); let list = []; try { list = m ? JSON.parse(m[0]) : []; } catch { list = []; }
+  const events = evClean(list, from, to);
+  await env.DB.prepare("INSERT INTO events_cache (k, at, body) VALUES (?, ?, ?) ON CONFLICT(k) DO UPDATE SET at = excluded.at, body = excluded.body").bind(key, Date.now(), JSON.stringify(events)).run();
+  return json({ events, left: Math.max(0, max - ((row ? row.n : 0) + 1)) }, 200, ch);
 }
 
 async function makeSession(env, sub, email, ver) {
@@ -487,18 +725,27 @@ export default {
           const owned = (await env.DB.prepare("SELECT id FROM teams WHERE owner = ?").bind(s.sub).all()).results || [];
           for (const t of owned) await dropTeam(env, t.id);
           await env.DB.prepare("DELETE FROM snaps WHERE sub = ?").bind(s.sub).run();
+          await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE sub = ?").bind(s.sub).run();
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
+          await evInit(env); await env.DB.prepare("DELETE FROM events_use WHERE sub = ?").bind(s.sub).run();
+          await nudgeInit(env); await env.DB.prepare("DELETE FROM nudge_use WHERE sub = ?").bind(s.sub).run();
+          await partnersInit(env); await env.DB.prepare("DELETE FROM partners WHERE owner = ? OR viewer = ?").bind(s.sub, s.sub).run();
           await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
           return json({ ok: true }, 200, ch);
         }
+      }
+      if (path === "/partners" || path.startsWith("/partners/")) {
+        if (!s) return json({ error: "signed out" }, 401, ch);
+        return await partners(env, req, s, path, ch);
       }
       if (path === "/teams" || path.startsWith("/teams/")) {
         if (!s) return json({ error: "signed out" }, 401, ch);
         return await teams(env, req, s, path, ch);
       }
       if (path === "/ella" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await ellaRoute(env, req, s, ch); }
+      if (path === "/events" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await eventsRoute(env, req, s, ch); }
       if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
       if (path === "/push" || path.startsWith("/push/")) {
         if (!s) return json({ error: "signed out" }, 401, ch);
@@ -515,5 +762,6 @@ export default {
       return json({ error: "server error" }, 500, ch);
     }
   },
-  async scheduled(ev, env, ctx) { ctx.waitUntil(runPush(env)); } // every minute: send due notifications
+  async scheduled(ev, env, ctx) { ctx.waitUntil(runPush(env)); // every minute: send due notifications
+    if (new Date().getUTCMinutes() === 7) ctx.waitUntil((async () => { await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE created < ?").bind(Date.now() - PROOF_DAYS * 864e5).run(); })()); } // hourly: proofs past 30 days
 };
