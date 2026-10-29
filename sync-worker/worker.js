@@ -345,8 +345,67 @@ async function partners(env, req, s, path, ch) {
     await env.DB.prepare("UPDATE partners SET doc = ?, updated = ? WHERE id = ?").bind(await sealT(env, id, r.owner, b.doc), now, id).run();
     return json({ updated: now }, 200, ch);
   }
+  if (parts[2] === "snaps") return partnerSnaps(env, req, s, r, parts, ch);
   if (parts.length === 2 && M === "DELETE") { // owner stops sharing, or the partner stops watching
     await env.DB.prepare("DELETE FROM partners WHERE id = ?").bind(id).run();
+    await psInit(env); await env.DB.prepare("DELETE FROM psnaps WHERE pid = ?").bind(id).run();
+    return json({ ok: true }, 200, ch);
+  }
+  return json({ error: "not found" }, 404, ch);
+}
+
+// ---- check-in snaps to an accountability partner (the owner opts in per partner) ----
+// The owner's app sends the check-in photo (with an optional sticker) to partners it chose; the partner can react once
+// (🔥 👏 💪 😂 🎯). Sealed per partner link, deleted after 30 days or when either side stops. Pushes use fixed wording.
+const PS_REACT = ["🔥", "👏", "💪", "😂", "🎯"];
+let psReady = false;
+async function psInit(env) { if (psReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS psnaps (id TEXT PRIMARY KEY, pid TEXT NOT NULL, k TEXT NOT NULL, at INTEGER NOT NULL, meta TEXT NOT NULL, photo TEXT NOT NULL, react TEXT, created INTEGER NOT NULL)").run();
+  await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS psnaps_one ON psnaps (pid, k)").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS psnaps_age ON psnaps (created)").run(); psReady = true; }
+async function pushTo(env, sub, msg) { // best effort, newest 3 devices
+  try { await pushInit(env); const devs = (await env.DB.prepare("SELECT id, box FROM push WHERE sub = ? ORDER BY updated DESC LIMIT 3").bind(sub).all()).results || [];
+    for (const d of devs) { let doc; try { doc = (await open(env, sub, d.box)).doc; } catch { continue; } let st = 0; try { st = await sendPush(env, doc, msg); } catch { } if (st === 404 || st === 410) await env.DB.prepare("DELETE FROM push WHERE id = ?").bind(d.id).run(); } } catch { }
+}
+async function partnerSnaps(env, req, s, r, parts, ch) {
+  await psInit(env); const M = req.method, now = Date.now(), owner = r.owner === s.sub, viewer = r.viewer === s.sub;
+  if (parts.length === 4 && M === "PUT") { // owner sends a snap for one check-in
+    if (!owner) return json({ error: "forbidden" }, 403, ch);
+    if (!r.viewer) return json({ error: "not accepted" }, 409, ch);
+    if (limited(req, 40, "psnap")) return json({ error: "slow down" }, 429, ch);
+    const k = decodeURIComponent(parts[3]); if (!PROOF_KEY.test(k)) return json({ error: "bad request" }, 400, ch);
+    const t = await req.text(); if (t.length > PROOF_MAX) return json({ error: "too large" }, 413, ch);
+    let b; try { b = JSON.parse(t); } catch { return json({ error: "bad request" }, 400, ch); }
+    const at = +b.at, photo = String(b.photo || "");
+    if (!Number.isFinite(at) || at > now + 5 * 60000 || at < now - 3 * 864e5) return json({ error: "bad time" }, 400, ch);
+    if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(photo)) return json({ error: "bad photo" }, 400, ch);
+    const meta = { at, title: String(b.title || "").slice(0, 60), sticker: String(b.sticker || "").slice(0, 30), place: String(b.place || "").slice(0, 80), v: ["ok", "review"].includes(b.v) ? b.v : "" };
+    const ex = await env.DB.prepare("SELECT id FROM psnaps WHERE pid = ? AND k = ?").bind(r.id, k).first(), sid = ex ? ex.id : "ps_" + rnd(16);
+    await env.DB.prepare("INSERT INTO psnaps (id, pid, k, at, meta, photo, react, created) VALUES (?, ?, ?, ?, ?, ?, NULL, ?) ON CONFLICT(pid, k) DO UPDATE SET at = excluded.at, meta = excluded.meta, photo = excluded.photo, created = excluded.created")
+      .bind(sid, r.id, k, at, await sealT(env, r.id, r.owner, meta), await sealT(env, r.id, r.owner, { photo }), now).run();
+    const nm = pName((await pNames(env, await env.DB.prepare("SELECT id, names FROM partners WHERE id = ?").bind(r.id).first())).owner) || "Your partner";
+    if (!ex) await pushTo(env, r.viewer, { title: `📸 ${nm}`.slice(0, 60), body: "Sent a check-in snap. Tap to see it and react.", url: "/app/#snaps", tag: "ps-" + r.id.slice(3, 15) });
+    return json({ id: sid }, 200, ch);
+  }
+  if (parts.length === 3 && M === "GET") { // both sides: the last 30 days (no photo data), newest first
+    const rows = (await env.DB.prepare("SELECT id, k, meta, react FROM psnaps WHERE pid = ? AND created > ? ORDER BY at DESC LIMIT 60").bind(r.id, now - PROOF_DAYS * 864e5).all()).results || [];
+    const out = []; for (const x of rows) { try { out.push({ id: x.id, k: x.k, react: x.react || "", ...(await openT(env, r.id, r.owner, x.meta)).doc }); } catch { } }
+    return json({ snaps: out }, 200, ch);
+  }
+  if (parts.length === 5 && parts[4] === "photo" && M === "GET") { // viewer (or the owner) opens one
+    const x = await env.DB.prepare("SELECT photo FROM psnaps WHERE pid = ? AND id = ?").bind(r.id, parts[3]).first();
+    if (!x) return json({ error: "not found" }, 404, ch);
+    try { return json({ photo: (await openT(env, r.id, r.owner, x.photo)).doc.photo }, 200, { ...ch, "cache-control": "no-store" }); } catch { return json({ error: "not found" }, 404, ch); }
+  }
+  if (parts.length === 5 && parts[4] === "react" && M === "POST") { // viewer reacts (can change it)
+    if (!viewer) return json({ error: "forbidden" }, 403, ch);
+    if (limited(req, 60, "preact")) return json({ error: "slow down" }, 429, ch);
+    let b = {}; try { b = JSON.parse(await req.text() || "{}"); } catch { }
+    if (!PS_REACT.includes(b.e)) return json({ error: "bad reaction" }, 400, ch);
+    const x = await env.DB.prepare("SELECT react FROM psnaps WHERE pid = ? AND id = ?").bind(r.id, parts[3]).first(); if (!x) return json({ error: "not found" }, 404, ch);
+    await env.DB.prepare("UPDATE psnaps SET react = ? WHERE pid = ? AND id = ?").bind(b.e, r.id, parts[3]).run();
+    if (!x.react) { const nm = pName((await pNames(env, await env.DB.prepare("SELECT id, names FROM partners WHERE id = ?").bind(r.id).first())).viewer) || "Your partner";
+      await pushTo(env, r.owner, { title: `${b.e} ${nm}`.slice(0, 60), body: "Reacted to your check-in snap.", url: "/app/", tag: "pr-" + parts[3].slice(3, 15) }); }
     return json({ ok: true }, 200, ch);
   }
   return json({ error: "not found" }, 404, ch);
@@ -731,6 +790,7 @@ export default {
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
           await evInit(env); await env.DB.prepare("DELETE FROM events_use WHERE sub = ?").bind(s.sub).run();
           await nudgeInit(env); await env.DB.prepare("DELETE FROM nudge_use WHERE sub = ?").bind(s.sub).run();
+          await partnersInit(env); await psInit(env); await env.DB.prepare("DELETE FROM psnaps WHERE pid IN (SELECT id FROM partners WHERE owner = ? OR viewer = ?)").bind(s.sub, s.sub).run();
           await partnersInit(env); await env.DB.prepare("DELETE FROM partners WHERE owner = ? OR viewer = ?").bind(s.sub, s.sub).run();
           await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
           return json({ ok: true }, 200, ch);
@@ -763,5 +823,6 @@ export default {
     }
   },
   async scheduled(ev, env, ctx) { ctx.waitUntil(runPush(env)); // every minute: send due notifications
-    if (new Date().getUTCMinutes() === 7) ctx.waitUntil((async () => { await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE created < ?").bind(Date.now() - PROOF_DAYS * 864e5).run(); })()); } // hourly: proofs past 30 days
+    if (new Date().getUTCMinutes() === 7) ctx.waitUntil((async () => { await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE created < ?").bind(Date.now() - PROOF_DAYS * 864e5).run();
+      await psInit(env); await env.DB.prepare("DELETE FROM psnaps WHERE created < ?").bind(Date.now() - PROOF_DAYS * 864e5).run(); })()); } // hourly: proofs past 30 days
 };

@@ -26,3 +26,7 @@ CREATE TABLE IF NOT EXISTS proofs (id TEXT PRIMARY KEY, team TEXT NOT NULL, sub 
 CREATE UNIQUE INDEX IF NOT EXISTS proofs_one ON proofs (team, sub, k);
 CREATE INDEX IF NOT EXISTS proofs_age ON proofs (created);
 CREATE TABLE IF NOT EXISTS geo_cache (k TEXT PRIMARY KEY, place TEXT NOT NULL, at INTEGER NOT NULL);
+-- Check-in snaps sent to an accountability partner (opt-in per partner), sealed, deleted after 30 days
+CREATE TABLE IF NOT EXISTS psnaps (id TEXT PRIMARY KEY, pid TEXT NOT NULL, k TEXT NOT NULL, at INTEGER NOT NULL, meta TEXT NOT NULL, photo TEXT NOT NULL, react TEXT, created INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS psnaps_one ON psnaps (pid, k);
+CREATE INDEX IF NOT EXISTS psnaps_age ON psnaps (created);
