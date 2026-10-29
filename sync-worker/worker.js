@@ -578,7 +578,7 @@ async function ellaRoute(env, req, s, ch) {
   await env.DB.prepare("DELETE FROM ella_use WHERE day < ?").bind(new Date(Date.now() - 3 * 864e5).toISOString().slice(0, 10)).run();
   const system = `You are Ella (short for Candela), a productivity and sales coach inside Hourline, a scheduling app for insurance and sales agents. Personality: ${tone}.
 Rules: Reply in at most 3 short sentences (under 60 words). Plain text, no markdown, no lists. Use the user's data below when relevant; never invent numbers, names or appointments.
-Stay on coaching: schedules, habits, prospecting, follow-ups, goals, motivation, sales conversations. For anything else (medical, legal, tax, investment advice, politics, personal crises), say briefly that you're a productivity coach and suggest the right kind of professional; if someone mentions self-harm or crisis, gently point them to 988 (US) or local emergency services.
+You coach on schedules, habits, prospecting, follow-ups, goals, motivation and sales conversations, and you also answer everyday general-knowledge questions briefly and accurately. If you are not sure of a fact, say so. For medical, legal, tax or investment questions give only general information and suggest the right professional; for a personal crisis, be kind and point them to real help (in the US, call or text 988).
 You can't take actions from here; if they want to book, add a prospect or change a setting, tell them the exact phrase to say, e.g. "book an appointment with Sam Friday at 3".
 Never shame the person. Never claim to be human.
 User data (JSON): ${ctx}`;
@@ -586,8 +586,8 @@ User data (JSON): ${ctx}`;
   try {
     r = await fetch(env.ANTHROPIC_URL || "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({ model: env.ELLA_MODEL || "claude-haiku-5-5", max_tokens: 220, system, messages: ellaTurns([...hist, { role: "user", content: q }]) }) });
-  } catch { return json({ error: "ai unavailable" }, 502, ch); }
-  if (!r.ok) return json({ error: "ai unavailable" }, 502, ch);
+  } catch { return json({ error: "ai unavailable", code: 0 }, 502, ch); }
+  if (!r.ok) { console.error("ella upstream", r.status); return json({ error: "ai unavailable", code: r.status }, 502, ch); } // status only (401 = bad key, 404 = model name, 429/529 = busy)
   const out = await r.json().catch(() => null), reply = out && Array.isArray(out.content) ? out.content.filter(c => c.type === "text").map(c => c.text).join(" ").trim().slice(0, 600) : "";
   return json(reply ? { text: reply, left: Math.max(0, max - ((row ? row.n : 0) + 1)) } : { error: "ai unavailable" }, reply ? 200 : 502, ch);
 }
@@ -812,7 +812,7 @@ export default {
         return await pushRoutes(env, req, s, path, ch);
       }
       if (path === "/" || path === "/health") // setup check: says only whether each setting exists, never its value
-        return json({ ok: true, service: "schedule-io-sync", setup: { db: !!env.DB, google: !!env.GOOGLE_CLIENT_ID, origin: !!env.APP_ORIGIN, session: !!env.SESSION_SECRET, data: !!env.DATA_KEY, push: !!globalThis.crypto?.subtle } }, 200, ch);
+        return json({ ok: true, service: "schedule-io-sync", setup: { db: !!env.DB, google: !!env.GOOGLE_CLIENT_ID, origin: !!env.APP_ORIGIN, session: !!env.SESSION_SECRET, data: !!env.DATA_KEY, push: !!globalThis.crypto?.subtle, ai: !!env.ANTHROPIC_API_KEY } }, 200, ch);
       return json({ error: "not found" }, 404, ch);
     } catch (e) {
       if (e && e.status === 413) return json({ error: "too large" }, 413, ch);
