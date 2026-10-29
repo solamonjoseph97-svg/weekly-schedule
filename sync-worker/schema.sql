@@ -13,6 +13,8 @@ CREATE INDEX IF NOT EXISTS push_by_sub ON push (sub);
 CREATE TABLE IF NOT EXISTS conf (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 -- Ella smart conversation: only a per-day message count per account (created on first use too)
 CREATE TABLE IF NOT EXISTS ella_use (sub TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (sub, day));
+CREATE TABLE IF NOT EXISTS events_cache (k TEXT PRIMARY KEY, at INTEGER NOT NULL, body TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS events_use (sub TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (sub, day));
 -- Leader nudges: per-day count per member, so a lead can nudge someone at most twice a day (created on first use too)
 CREATE TABLE IF NOT EXISTS nudge_use (team TEXT NOT NULL, sub TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (team, sub, day));
 -- Accountability partners (one way): sealed names and shared copy per invite link (created on first use too)

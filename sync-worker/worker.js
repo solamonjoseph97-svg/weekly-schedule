@@ -13,7 +13,8 @@
 // Settings (Worker → Settings → Variables and secrets):
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
 //   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop),
-//   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation), ELLA_DAILY (text, messages per account per day, default 40)
+//   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation and the event finder), ELLA_DAILY (text, messages per account per day, default 40)
+//   EVENTS_DAILY (text, event searches per account per day, default 5), WEB_SEARCH_TOOL (text, default web_search_20250305)
 // Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf, nudge_use; partners (created on
 // first use, also in schema.sql). Cron Trigger every minute sends due notifications (wrangler.toml [triggers]).
 
@@ -462,6 +463,66 @@ User data (JSON): ${ctx}`;
   return json(reply ? { text: reply, left: Math.max(0, max - ((row ? row.n : 0) + 1)) } : { error: "ai unavailable" }, reply ? 200 : 502, ch);
 }
 
+// Ella's event finder: in-person networking events near a city, found with the AI's web search tool.
+// Privacy: only the city/region the person typed is sent (no name, schedule, prospects or location coordinates).
+// Results are cached per city + window for 12 hours and shared (they hold no personal data). Searches are limited per account.
+let evReady = false;
+async function evInit(env) { if (evReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS events_cache (k TEXT PRIMARY KEY, at INTEGER NOT NULL, body TEXT NOT NULL)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS events_use (sub TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (sub, day))").run(); evReady = true; }
+const EV_CITY = /^[A-Za-z][A-Za-z .,'-]{1,59}$/, EV_HHMM = /^([01]\d|2[0-3]):[0-5]\d$/, EV_ISO = /^\d{4}-\d{2}-\d{2}$/;
+const EV_FOCUS = { general: "business networking events, mixers and professional meetups", insurance: "business networking, chamber of commerce, small-business owner, real-estate, financial-services and community events where an insurance or financial agent can meet prospects", sales: "business networking, sales, entrepreneur and small-business events" };
+function evClean(list, from, to) {
+  const out = [];
+  for (const x of Array.isArray(list) ? list : []) {
+    if (!x || typeof x !== "object") continue;
+    const title = String(x.title || "").trim().slice(0, 90), date = String(x.date || "");
+    if (!title || !EV_ISO.test(date) || date < from || date > to) continue;
+    let url = String(x.url || "").trim(); try { const u = new URL(url); if (u.protocol !== "https:") url = ""; else url = u.href.slice(0, 300); } catch { url = ""; }
+    if (!url) continue; // no real https event page = can't be checked, so it isn't shown
+    out.push({ title, date, start: EV_HHMM.test(x.start) ? x.start : "", end: EV_HHMM.test(x.end) ? x.end : "", venue: String(x.venue || "").slice(0, 80), address: String(x.address || "").slice(0, 120),
+      cost: String(x.cost || "").slice(0, 30), url, why: String(x.why || "").slice(0, 140) });
+    if (out.length >= 12) break;
+  }
+  return out.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+}
+async function eventsRoute(env, req, s, ch) {
+  if (!env.ANTHROPIC_API_KEY) return json({ error: "not set up" }, 503, ch);
+  if (limited(req, 10, "events")) return json({ error: "slow down" }, 429, ch);
+  const text = await req.text(); if (text.length > 2000) return json({ error: "too large" }, 413, ch);
+  let b; try { b = JSON.parse(text); } catch { return json({ error: "bad request" }, 400, ch); }
+  const city = String(b && b.city || "").trim().replace(/\s+/g, " "), region = String(b && b.region || "").trim().slice(0, 40), focus = EV_FOCUS[b && b.focus] ? b.focus : "insurance";
+  const days = [7, 14, 30].includes(+(b && b.days)) ? +b.days : 14, tz = /^[A-Za-z_]+\/[A-Za-z_]+$/.test(b && b.tz || "") ? b.tz : "America/Chicago";
+  if (!EV_CITY.test(city) || (region && !EV_CITY.test(region))) return json({ error: "bad city" }, 400, ch);
+  await evInit(env);
+  const from = new Date().toISOString().slice(0, 10), to = new Date(Date.now() + days * 864e5).toISOString().slice(0, 10);
+  const key = [city.toLowerCase(), region.toLowerCase(), focus, days, from].join("|");
+  const hit = await env.DB.prepare("SELECT at, body FROM events_cache WHERE k = ?").bind(key).first();
+  if (hit && Date.now() - hit.at < 12 * 3600e3) return json({ events: JSON.parse(hit.body), cached: true }, 200, ch);
+  const day = from, max = +env.EVENTS_DAILY || 5;
+  const row = await env.DB.prepare("SELECT n FROM events_use WHERE sub = ? AND day = ?").bind(s.sub, day).first();
+  if (row && row.n >= max) return json({ error: "daily limit" }, 429, ch);
+  await env.DB.prepare("INSERT INTO events_use (sub, day, n) VALUES (?, ?, 1) ON CONFLICT(sub, day) DO UPDATE SET n = n + 1").bind(s.sub, day).run();
+  await env.DB.prepare("DELETE FROM events_use WHERE day < ?").bind(new Date(Date.now() - 3 * 864e5).toISOString().slice(0, 10)).run();
+  await env.DB.prepare("DELETE FROM events_cache WHERE at < ?").bind(Date.now() - 2 * 864e5).run();
+  const place = city + (region ? ", " + region : "");
+  const system = `You find real, upcoming, in-person events for a sales professional. Use web search. Only include events you found on a real web page with a specific date between ${from} and ${to} in or near ${place}. Never invent events, dates, venues or links.
+Reply with ONLY a JSON array (no prose, no markdown), up to 10 items, each: {"title":"","date":"YYYY-MM-DD","start":"HH:MM" (24h, or ""),"end":"HH:MM" or "","venue":"","address":"","cost":"Free" or price or "","url":"https link to the event page","why":"one short sentence on why it's good for meeting prospects"}. If you find nothing, reply [].`;
+  let r;
+  try {
+    r = await fetch(env.ANTHROPIC_URL || "https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: env.EVENTS_MODEL || env.ELLA_MODEL || "claude-haiku-5-5", max_tokens: 1800, system,
+        tools: [{ type: env.WEB_SEARCH_TOOL || "web_search_20250305", name: "web_search", max_uses: 4, user_location: { type: "approximate", city, ...(region ? { region } : {}), country: "US", timezone: tz } }],
+        messages: [{ role: "user", content: `Find ${EV_FOCUS[focus]} in ${place} from ${from} to ${to}. Prefer Eventbrite, Meetup, chamber of commerce and venue pages.` }] }) });
+  } catch { return json({ error: "ai unavailable" }, 502, ch); }
+  if (!r.ok) return json({ error: "ai unavailable" }, 502, ch);
+  const out = await r.json().catch(() => null), txt = out && Array.isArray(out.content) ? out.content.filter(c => c.type === "text").map(c => c.text).join("\n") : "";
+  const m = txt.match(/\[[\s\S]*\]/); let list = []; try { list = m ? JSON.parse(m[0]) : []; } catch { list = []; }
+  const events = evClean(list, from, to);
+  await env.DB.prepare("INSERT INTO events_cache (k, at, body) VALUES (?, ?, ?) ON CONFLICT(k) DO UPDATE SET at = excluded.at, body = excluded.body").bind(key, Date.now(), JSON.stringify(events)).run();
+  return json({ events, left: Math.max(0, max - ((row ? row.n : 0) + 1)) }, 200, ch);
+}
+
 async function makeSession(env, sub, email, ver) {
   const body = b64u(enc.encode(JSON.stringify({ sub, email, ver, exp: Date.now() + SESSION_DAYS * 864e5 })));
   return body + "." + b64u(await crypto.subtle.sign("HMAC", await hmacKey(env), enc.encode(body)));
@@ -597,6 +658,7 @@ export default {
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
+          await evInit(env); await env.DB.prepare("DELETE FROM events_use WHERE sub = ?").bind(s.sub).run();
           await nudgeInit(env); await env.DB.prepare("DELETE FROM nudge_use WHERE sub = ?").bind(s.sub).run();
           await partnersInit(env); await env.DB.prepare("DELETE FROM partners WHERE owner = ? OR viewer = ?").bind(s.sub, s.sub).run();
           await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
@@ -612,6 +674,7 @@ export default {
         return await teams(env, req, s, path, ch);
       }
       if (path === "/ella" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await ellaRoute(env, req, s, ch); }
+      if (path === "/events" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await eventsRoute(env, req, s, ch); }
       if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
       if (path === "/push" || path.startsWith("/push/")) {
         if (!s) return json({ error: "signed out" }, 401, ch);
