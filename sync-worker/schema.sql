@@ -21,3 +21,8 @@ CREATE TABLE IF NOT EXISTS nudge_use (team TEXT NOT NULL, sub TEXT NOT NULL, day
 CREATE TABLE IF NOT EXISTS partners (id TEXT PRIMARY KEY, owner TEXT NOT NULL, viewer TEXT, invite_hash TEXT, names TEXT, doc TEXT, updated INTEGER, created INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS partners_by_owner ON partners (owner);
 CREATE INDEX IF NOT EXISTS partners_by_viewer ON partners (viewer);
+-- Check-in proof: sealed photo + place per member check-in, lead-only, deleted after 30 days (created on first use too)
+CREATE TABLE IF NOT EXISTS proofs (id TEXT PRIMARY KEY, team TEXT NOT NULL, sub TEXT NOT NULL, k TEXT NOT NULL, at INTEGER NOT NULL, meta TEXT NOT NULL, photo TEXT, created INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS proofs_one ON proofs (team, sub, k);
+CREATE INDEX IF NOT EXISTS proofs_age ON proofs (created);
+CREATE TABLE IF NOT EXISTS geo_cache (k TEXT PRIMARY KEY, place TEXT NOT NULL, at INTEGER NOT NULL);

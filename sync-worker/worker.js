@@ -15,6 +15,7 @@
 //   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop),
 //   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation and the event finder), ELLA_DAILY (text, messages per account per day, default 40)
 //   EVENTS_DAILY (text, event searches per account per day, default 5), WEB_SEARCH_TOOL (text, default web_search_20250305)
+//   GEOCODE_URL (text, reverse-geocoding endpoint, default OpenStreetMap Nominatim), GEOCODE_OFF (text "1" = no addresses on check-in proof)
 // Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf, nudge_use; partners (created on
 // first use, also in schema.sql). Cron Trigger every minute sends due notifications (wrangler.toml [triggers]).
 
@@ -86,9 +87,76 @@ async function openT(env, team, sub, box) {
   try { return { doc: await tryKey(env.DATA_KEY), stale: false }; } catch (e) { if (!env.DATA_KEY_OLD) throw e; }
   return { doc: await tryKey(env.DATA_KEY_OLD), stale: true };
 }
+// Check-in proof (team members): a live camera photo and where it was taken, sealed per member like snaps.
+// Only the team lead can read them. Photos and places are deleted after PROOF_DAYS, when the member leaves, or with their data.
+const PROOF_DAYS = 30, PROOF_MAX = 600_000, PROOF_KEY = /^[A-Za-z0-9_-]{1,60}\|\d{4}-\d{2}-\d{2}$/;
+let proofReady = false;
+async function proofInit(env) { if (proofReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS proofs (id TEXT PRIMARY KEY, team TEXT NOT NULL, sub TEXT NOT NULL, k TEXT NOT NULL, at INTEGER NOT NULL, meta TEXT NOT NULL, photo TEXT, created INTEGER NOT NULL)").run();
+  await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS proofs_one ON proofs (team, sub, k)").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS proofs_age ON proofs (created)").run(); proofReady = true; }
+// Turns a check-in's coordinates into a readable place ("The Domain, 11410 Century Oaks Ter, Austin") for the lead.
+// Uses OpenStreetMap's Nominatim from the server (only the coordinates are sent, never who you are), cached ~11 m apart.
+// GEOCODE_URL can point at another provider later; GEOCODE_OFF=1 turns it off.
+async function placeName(env, lat, lng) {
+  if (env.GEOCODE_OFF === "1") return "";
+  const k = lat.toFixed(4) + "," + lng.toFixed(4);
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS geo_cache (k TEXT PRIMARY KEY, place TEXT NOT NULL, at INTEGER NOT NULL)").run();
+  const hit = await env.DB.prepare("SELECT place FROM geo_cache WHERE k = ?").bind(k).first(); if (hit) return hit.place;
+  try {
+    const u = new URL(env.GEOCODE_URL || "https://nominatim.openstreetmap.org/reverse"); u.searchParams.set("format", "jsonv2"); u.searchParams.set("lat", String(lat)); u.searchParams.set("lon", String(lng)); u.searchParams.set("zoom", "18"); u.searchParams.set("addressdetails", "1");
+    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 3500);
+    const r = await fetch(u, { headers: { "user-agent": "Hourline/1.0 (+https://hourline.io)", "accept-language": "en" }, signal: ctl.signal }); clearTimeout(tm);
+    if (!r.ok) return "";
+    const j = await r.json(), a = j.address || {};
+    const name = j.name && !/^\d/.test(j.name) ? j.name : (a.shop || a.amenity || a.building || a.office || a.leisure || "");
+    const street = [a.house_number, a.road].filter(Boolean).join(" "), city = a.city || a.town || a.village || a.suburb || a.county || "";
+    const place = [name, street, [city, a.state ? (a["ISO3166-2-lvl4"] || "").split("-")[1] || a.state : ""].filter(Boolean).join(", ")].filter(Boolean).join(" · ").slice(0, 140);
+    if (place) await env.DB.prepare("INSERT INTO geo_cache (k, place, at) VALUES (?, ?, ?) ON CONFLICT(k) DO NOTHING").bind(k, place, Date.now()).run();
+    return place;
+  } catch { return ""; }
+}
+async function proofRoutes(env, req, s, id, me, parts, ch) {
+  const M = req.method, lead = me.role === "lead", now = Date.now(); await proofInit(env);
+  if (parts.length === 4 && M === "PUT") { // a member saves the proof for one check-in (re-taking replaces it)
+    if (lead) return json({ error: "forbidden" }, 403, ch);
+    if (limited(req, 30, "proof")) return json({ error: "slow down" }, 429, ch);
+    const k = decodeURIComponent(parts[3]); if (!PROOF_KEY.test(k)) return json({ error: "bad request" }, 400, ch);
+    const t = await req.text(); if (t.length > PROOF_MAX) return json({ error: "too large" }, 413, ch);
+    let b; try { b = JSON.parse(t); } catch { return json({ error: "bad request" }, 400, ch); }
+    const at = +b.at, photo = typeof b.photo === "string" ? b.photo : "";
+    if (!Number.isFinite(at) || at > now + 5 * 60000 || at < now - 3 * 864e5) return json({ error: "bad time" }, 400, ch);
+    if (photo && !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(photo)) return json({ error: "bad photo" }, 400, ch);
+    const num = (v, lo, hi) => Number.isFinite(+v) && +v >= lo && +v <= hi ? Math.round(+v * 1e6) / 1e6 : null;
+    const lat = num(b.lat, -90, 90), lng = num(b.lng, -180, 180), acc = num(b.acc, 0, 100000);
+    const place = lat != null && lng != null ? await placeName(env, lat, lng) : "";
+    const meta = { at, title: String(b.title || "").slice(0, 60), place, lat: lat != null && lng != null ? lat : null, lng: lat != null && lng != null ? lng : null, acc: lat != null ? acc : null,
+      why: photo ? "" : String(b.why || "no photo").slice(0, 60), locWhy: lat != null ? "" : String(b.locWhy || "no location").slice(0, 60), photo: !!photo };
+    const ex = await env.DB.prepare("SELECT id FROM proofs WHERE team = ? AND sub = ? AND k = ?").bind(id, s.sub, k).first();
+    const pid = ex ? ex.id : "pf_" + rnd(16);
+    await env.DB.prepare("INSERT INTO proofs (id, team, sub, k, at, meta, photo, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(team, sub, k) DO UPDATE SET at = excluded.at, meta = excluded.meta, photo = excluded.photo, created = excluded.created")
+      .bind(pid, id, s.sub, k, at, await sealT(env, id, s.sub, meta), photo ? await sealT(env, id, s.sub, { photo }) : null, now).run();
+    return json({ id: pid }, 200, ch);
+  }
+  if (!lead) return json({ error: "forbidden" }, 403, ch);
+  if (parts.length === 3 && M === "GET") { // lead: proof details for the last N days (no photos, just what each check-in carried)
+    const days = Math.min(PROOF_DAYS, Math.max(1, +new URL(req.url).searchParams.get("days") || 7));
+    const rows = (await env.DB.prepare("SELECT p.id AS id, p.sub AS sub, p.k AS k, p.meta AS meta, m.mid AS mid FROM proofs p JOIN members m ON m.team = p.team AND m.sub = p.sub WHERE p.team = ? AND p.created > ? ORDER BY p.at DESC LIMIT 2000").bind(id, now - days * 864e5).all()).results || [];
+    const out = [];
+    for (const r of rows) { try { out.push({ id: r.id, mid: r.mid, k: r.k, ...(await openT(env, id, r.sub, r.meta)).doc }); } catch { } }
+    return json({ proofs: out }, 200, ch);
+  }
+  if (parts.length === 5 && parts[4] === "photo" && M === "GET") { // lead: one photo
+    const r = await env.DB.prepare("SELECT sub, photo FROM proofs WHERE team = ? AND id = ?").bind(id, parts[3]).first();
+    if (!r || !r.photo) return json({ error: "not found" }, 404, ch);
+    try { return json({ photo: (await openT(env, id, r.sub, r.photo)).doc.photo }, 200, { ...ch, "cache-control": "no-store" }); } catch { return json({ error: "not found" }, 404, ch); }
+  }
+  return json({ error: "not found" }, 404, ch);
+}
 async function memberOf(env, team, sub) { return env.DB.prepare("SELECT role, mid FROM members WHERE team = ? AND sub = ?").bind(team, sub).first(); }
 async function dropTeam(env, team) {
   await env.DB.prepare("DELETE FROM snaps WHERE team = ?").bind(team).run();
+  await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM members WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(team).run();
 }
@@ -127,6 +195,7 @@ async function teams(env, req, s, path, ch) {
   const me = await memberOf(env, id, s.sub);
   if (!me) return json({ error: "not found" }, 404, ch); // never reveal whether a team exists to outsiders
   const lead = me.role === "lead";
+  if (parts[2] === "proofs") return proofRoutes(env, req, s, id, me, parts, ch);
   if (parts.length === 2 && M === "GET") { // lead only: every member's latest shared copy
     if (!lead) return json({ error: "forbidden" }, 403, ch);
     const t = await env.DB.prepare("SELECT name FROM teams WHERE id = ?").bind(id).first();
@@ -201,6 +270,7 @@ async function teams(env, req, s, path, ch) {
     const self = target.sub === s.sub;
     if (!(self || lead) || (self && lead)) return json({ error: "forbidden" }, 403, ch); // a lead deletes the team instead
     await env.DB.prepare("DELETE FROM snaps WHERE team = ? AND sub = ?").bind(id, target.sub).run();
+    await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE team = ? AND sub = ?").bind(id, target.sub).run();
     await env.DB.prepare("DELETE FROM members WHERE team = ? AND sub = ?").bind(id, target.sub).run();
     return json({ ok: true }, 200, ch);
   }
@@ -655,6 +725,7 @@ export default {
           const owned = (await env.DB.prepare("SELECT id FROM teams WHERE owner = ?").bind(s.sub).all()).results || [];
           for (const t of owned) await dropTeam(env, t.id);
           await env.DB.prepare("DELETE FROM snaps WHERE sub = ?").bind(s.sub).run();
+          await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE sub = ?").bind(s.sub).run();
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
@@ -691,5 +762,6 @@ export default {
       return json({ error: "server error" }, 500, ch);
     }
   },
-  async scheduled(ev, env, ctx) { ctx.waitUntil(runPush(env)); } // every minute: send due notifications
+  async scheduled(ev, env, ctx) { ctx.waitUntil(runPush(env)); // every minute: send due notifications
+    if (new Date().getUTCMinutes() === 7) ctx.waitUntil((async () => { await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE created < ?").bind(Date.now() - PROOF_DAYS * 864e5).run(); })()); } // hourly: proofs past 30 days
 };
