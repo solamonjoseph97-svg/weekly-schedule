@@ -596,9 +596,11 @@ User data (JSON): ${ctx}`;
 // ---- problem reports ("Report a problem" in the app). Anyone can send one (signed in or not), at most 5 per 10 minutes
 // per address. The text, contact and technical details are encrypted at rest; only an admin (ADMIN_EMAILS, comma list)
 // can read them. Admins get a push when one arrives. Kept 180 days. "Delete my cloud data" removes a person's reports.
+// The technical triage fields (area, app version, device, error messages: no names, contact or schedule content) are kept
+// readable in "meta" so the builder (and Claude, through the Cloudflare connector) can triage without decrypting anything.
 let fbReady = false;
 async function fbInit(env) { if (fbReady) return;
-  await env.DB.prepare("CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, at INTEGER NOT NULL, sub TEXT NOT NULL, box TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, at INTEGER NOT NULL, sub TEXT NOT NULL, box TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, meta TEXT NOT NULL DEFAULT '{}')").run();
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS feedback_at ON feedback (at)").run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS admins (sub TEXT PRIMARY KEY, seen INTEGER NOT NULL)").run(); fbReady = true; }
 const adminList = env => String(env.ADMIN_EMAILS || "solamonjoseph97@gmail.com").toLowerCase().split(",").map(x => x.trim()).filter(Boolean);
@@ -613,7 +615,8 @@ async function feedbackRoutes(env, req, s, path, ch) {
     const area = String(b.area || "").replace(/[^a-z-]/g, "").slice(0, 20), contact = String(b.contact || "").trim().slice(0, 120);
     let diag = {}; try { diag = JSON.parse(JSON.stringify(b.diag || {}).slice(0, 3000)); } catch { diag = {}; }
     const id = "fb_" + rnd(12), at = Date.now();
-    await env.DB.prepare("INSERT INTO feedback (id, at, sub, box, done) VALUES (?, ?, ?, ?, 0)").bind(id, at, s ? s.sub : "", await seal(env, "feedback", { text: msg, area, contact, diag, email: s ? s.email || "" : "" })).run();
+    const meta = JSON.stringify({ area, v: String(diag.v || "").slice(0, 30), sw: String(diag.sw || "").slice(0, 12), ua: String(diag.ua || "").slice(0, 180), home: !!diag.homeScreen, notif: String(diag.notifications || "").slice(0, 10), sync: !!diag.sync, team: String(diag.team || "").slice(0, 10), errors: Array.isArray(diag.errors) ? diag.errors.slice(-5).map(e => ({ t: String(e && e.t || "").slice(0, 16), m: String(e && e.m || "").slice(0, 140), l: +(e && e.l) || 0 })) : [] });
+    await env.DB.prepare("INSERT INTO feedback (id, at, sub, box, done, meta) VALUES (?, ?, ?, ?, 0, ?)").bind(id, at, s ? s.sub : "", await seal(env, "feedback", { text: msg, area, contact, diag, email: s ? s.email || "" : "" }), meta).run();
     const admins = (await env.DB.prepare("SELECT sub FROM admins").all()).results || [];
     for (const a of admins) await pushTo(env, a.sub, { title: "New problem report", body: (area ? area + ": " : "") + msg.slice(0, 100), url: "/app/#reports", tag: "fb-" + id });
     return json({ ok: true, id }, 200, ch);

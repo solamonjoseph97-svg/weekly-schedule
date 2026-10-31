@@ -32,6 +32,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS psnaps_one ON psnaps (pid, k);
 CREATE INDEX IF NOT EXISTS psnaps_age ON psnaps (created);
 
 -- problem reports from the app (encrypted at rest; admins read them in the app)
-CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, at INTEGER NOT NULL, sub TEXT NOT NULL, box TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, at INTEGER NOT NULL, sub TEXT NOT NULL, box TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, meta TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS feedback_at ON feedback (at);
 CREATE TABLE IF NOT EXISTS admins (sub TEXT PRIMARY KEY, seen INTEGER NOT NULL);
