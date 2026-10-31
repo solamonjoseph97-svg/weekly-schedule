@@ -14,6 +14,7 @@
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
 //   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop),
 //   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation and the event finder), ELLA_DAILY (text, messages per account per day, default 40)
+//   ADMIN_EMAILS (text, comma-separated Google emails that can read problem reports; defaults to the owner)
 //   EVENTS_DAILY (text, event searches per account per day, default 5), WEB_SEARCH_TOOL (text, default web_search_20250305)
 //   GEOCODE_URL (text, reverse-geocoding endpoint, default OpenStreetMap Nominatim), GEOCODE_OFF (text "1" = no addresses on check-in proof)
 // Binding: D1 database as DB (tables: schema.sql). Teams: teams, members, snaps. Notifications: push, conf, nudge_use; partners (created on
@@ -592,6 +593,45 @@ User data (JSON): ${ctx}`;
   return json(reply ? { text: reply, left: Math.max(0, max - ((row ? row.n : 0) + 1)) } : { error: "ai unavailable" }, reply ? 200 : 502, ch);
 }
 
+// ---- problem reports ("Report a problem" in the app). Anyone can send one (signed in or not), at most 5 per 10 minutes
+// per address. The text, contact and technical details are encrypted at rest; only an admin (ADMIN_EMAILS, comma list)
+// can read them. Admins get a push when one arrives. Kept 180 days. "Delete my cloud data" removes a person's reports.
+let fbReady = false;
+async function fbInit(env) { if (fbReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, at INTEGER NOT NULL, sub TEXT NOT NULL, box TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS feedback_at ON feedback (at)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS admins (sub TEXT PRIMARY KEY, seen INTEGER NOT NULL)").run(); fbReady = true; }
+const adminList = env => String(env.ADMIN_EMAILS || "solamonjoseph97@gmail.com").toLowerCase().split(",").map(x => x.trim()).filter(Boolean);
+const isAdmin = (env, s) => !!(s && s.email && adminList(env).includes(String(s.email).toLowerCase()));
+async function feedbackRoutes(env, req, s, path, ch) {
+  await fbInit(env); const M = req.method;
+  if (path === "/feedback" && M === "POST") {
+    if (limited(req, 5, "fb")) return json({ error: "slow down" }, 429, ch);
+    const text = await req.text(); if (text.length > 8000) return json({ error: "too large" }, 413, ch);
+    let b; try { b = JSON.parse(text); } catch { return json({ error: "bad request" }, 400, ch); }
+    const msg = String(b && b.text || "").trim().slice(0, 2000); if (msg.length < 3) return json({ error: "bad request" }, 400, ch);
+    const area = String(b.area || "").replace(/[^a-z-]/g, "").slice(0, 20), contact = String(b.contact || "").trim().slice(0, 120);
+    let diag = {}; try { diag = JSON.parse(JSON.stringify(b.diag || {}).slice(0, 3000)); } catch { diag = {}; }
+    const id = "fb_" + rnd(12), at = Date.now();
+    await env.DB.prepare("INSERT INTO feedback (id, at, sub, box, done) VALUES (?, ?, ?, ?, 0)").bind(id, at, s ? s.sub : "", await seal(env, "feedback", { text: msg, area, contact, diag, email: s ? s.email || "" : "" })).run();
+    const admins = (await env.DB.prepare("SELECT sub FROM admins").all()).results || [];
+    for (const a of admins) await pushTo(env, a.sub, { title: "New problem report", body: (area ? area + ": " : "") + msg.slice(0, 100), url: "/app/#reports", tag: "fb-" + id });
+    return json({ ok: true, id }, 200, ch);
+  }
+  if (!s) return json({ error: "signed out" }, 401, ch);
+  if (!isAdmin(env, s)) return json({ error: "not allowed" }, 403, ch);
+  await env.DB.prepare("INSERT INTO admins (sub, seen) VALUES (?, ?) ON CONFLICT(sub) DO UPDATE SET seen = excluded.seen").bind(s.sub, Date.now()).run();
+  if (path === "/admin/feedback" && M === "GET") {
+    const rows = (await env.DB.prepare("SELECT id, at, done, box FROM feedback ORDER BY at DESC LIMIT 100").all()).results || [];
+    const out = [];for (const r of rows) { try { const d = (await open(env, "feedback", r.box)).doc; out.push({ id: r.id, at: r.at, done: !!r.done, ...d }); } catch { } }
+    return json({ items: out }, 200, ch);
+  }
+  const m = path.match(/^\/admin\/feedback\/(fb_[A-Za-z0-9_-]{8,30})$/);
+  if (m && M === "POST") { let b = {}; try { b = await req.json(); } catch { }
+    await env.DB.prepare("UPDATE feedback SET done = ? WHERE id = ?").bind(b && b.done ? 1 : 0, m[1]).run(); return json({ ok: true }, 200, ch); }
+  return json({ error: "not found" }, 404, ch);
+}
+
 // Ella's event finder: in-person networking events near a city, found with the AI's web search tool.
 // Privacy: only the city/region the person typed is sent (no name, schedule, prospects or location coordinates).
 // Results are cached per city + window for 12 hours and shared (they hold no personal data). Searches are limited per account.
@@ -790,6 +830,7 @@ export default {
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
           await evInit(env); await env.DB.prepare("DELETE FROM events_use WHERE sub = ?").bind(s.sub).run();
           await nudgeInit(env); await env.DB.prepare("DELETE FROM nudge_use WHERE sub = ?").bind(s.sub).run();
+          await fbInit(env); await env.DB.prepare("DELETE FROM feedback WHERE sub = ?").bind(s.sub).run();
           await partnersInit(env); await psInit(env); await env.DB.prepare("DELETE FROM psnaps WHERE pid IN (SELECT id FROM partners WHERE owner = ? OR viewer = ?)").bind(s.sub, s.sub).run();
           await partnersInit(env); await env.DB.prepare("DELETE FROM partners WHERE owner = ? OR viewer = ?").bind(s.sub, s.sub).run();
           await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
@@ -806,6 +847,7 @@ export default {
       }
       if (path === "/ella" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await ellaRoute(env, req, s, ch); }
       if (path === "/events" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await eventsRoute(env, req, s, ch); }
+      if (path === "/feedback" || path === "/admin/feedback" || path.startsWith("/admin/feedback/")) return await feedbackRoutes(env, req, s, path, ch);
       if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
       if (path === "/push" || path.startsWith("/push/")) {
         if (!s) return json({ error: "signed out" }, 401, ch);
@@ -824,5 +866,6 @@ export default {
   },
   async scheduled(ev, env, ctx) { ctx.waitUntil(runPush(env)); // every minute: send due notifications
     if (new Date().getUTCMinutes() === 7) ctx.waitUntil((async () => { await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE created < ?").bind(Date.now() - PROOF_DAYS * 864e5).run();
-      await psInit(env); await env.DB.prepare("DELETE FROM psnaps WHERE created < ?").bind(Date.now() - PROOF_DAYS * 864e5).run(); })()); } // hourly: proofs past 30 days
+      await psInit(env); await env.DB.prepare("DELETE FROM psnaps WHERE created < ?").bind(Date.now() - PROOF_DAYS * 864e5).run();
+      await fbInit(env); await env.DB.prepare("DELETE FROM feedback WHERE at < ?").bind(Date.now() - 180 * 864e5).run(); })()); } // hourly: proofs past 30 days
 };
