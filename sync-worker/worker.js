@@ -69,7 +69,7 @@ async function open(env, sub, box) {
   return { doc: await openWith(env.DATA_KEY_OLD, sub, iv, ct), stale: true };
 }
 
-// ---- teams: a member's device publishes a filtered copy of their schedule for their team lead ----
+// ---- teams: a member's device publishes a filtered copy of their schedule for their team lead, and for any teammates they pick ----
 // Each copy is encrypted with a key unique to the team (HKDF info "team:<id>"), with team and member bound in as
 // additional data. Every request re-checks membership in the database; removing someone deletes their copy at once.
 const MAX_SNAP = 400_000, MAX_TEAMS_OWNED = 5, MAX_MEMBERS = 500;
@@ -155,6 +155,13 @@ async function proofRoutes(env, req, s, id, me, parts, ch) {
   return json({ error: "not found" }, 404, ch);
 }
 async function memberOf(env, team, sub) { return env.DB.prepare("SELECT role, mid FROM members WHERE team = ? AND sub = ?").bind(team, sub).first(); }
+// Sharing with teammates: each shared copy lists which teammates (by member id) may read it, besides the lead, and each
+// member's display name is kept sealed so teammates can be shown by name. Added columns, created on first use.
+let shareReady = false;
+async function shareInit(env) { if (shareReady) return;
+  for (const q of ["ALTER TABLE snaps ADD COLUMN readers TEXT", "ALTER TABLE members ADD COLUMN nbox TEXT"]) { try { await env.DB.prepare(q).run(); } catch (e) { /* already there */ } }
+  shareReady = true; }
+const readersOf = r => { try { const a = JSON.parse(r || "[]"); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } };
 async function dropTeam(env, team) {
   await env.DB.prepare("DELETE FROM snaps WHERE team = ?").bind(team).run();
   await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE team = ?").bind(team).run();
@@ -197,6 +204,27 @@ async function teams(env, req, s, path, ch) {
   if (!me) return json({ error: "not found" }, 404, ch); // never reveal whether a team exists to outsiders
   const lead = me.role === "lead";
   if (parts[2] === "proofs") return proofRoutes(env, req, s, id, me, parts, ch);
+  if (parts.length === 3 && parts[2] === "roster" && M === "GET") { // any member: who's on the team (names only), for choosing who to share with
+    await shareInit(env);
+    const ms = (await env.DB.prepare("SELECT m.sub AS sub, m.mid AS mid, m.role AS role, m.nbox AS nbox, s.readers AS readers FROM members m LEFT JOIN snaps s ON s.team = m.team AND s.sub = m.sub WHERE m.team = ?").bind(id).all()).results || [];
+    const out = [];
+    for (const m of ms) {
+      let name = ""; if (m.nbox) { try { name = String((await openT(env, id, m.sub, m.nbox)).doc.name || "").slice(0, 40); } catch { name = ""; } }
+      out.push({ mid: m.mid, role: m.role, name, me: m.sub === s.sub, sharesWithMe: m.sub !== s.sub && (lead || readersOf(m.readers).includes(me.mid)) });
+    }
+    return json({ members: out }, 200, ch);
+  }
+  if (parts.length === 3 && parts[2] === "shared" && M === "GET") { // any member: the copies teammates chose to share with me
+    await shareInit(env);
+    const ms = (await env.DB.prepare("SELECT m.sub AS sub, m.mid AS mid, m.role AS role, s.doc AS doc, s.updated AS updated, s.readers AS readers FROM members m JOIN snaps s ON s.team = m.team AND s.sub = m.sub WHERE m.team = ?").bind(id).all()).results || [];
+    const out = [];
+    for (const m of ms) {
+      if (m.sub === s.sub || !readersOf(m.readers).includes(me.mid)) continue;
+      let doc = null; try { doc = (await openT(env, id, m.sub, m.doc)).doc; } catch { doc = null; }
+      out.push({ mid: m.mid, role: m.role, updated: m.updated || null, doc });
+    }
+    return json({ members: out }, 200, ch);
+  }
   if (parts.length === 2 && M === "GET") { // lead only: every member's latest shared copy
     if (!lead) return json({ error: "forbidden" }, 403, ch);
     const t = await env.DB.prepare("SELECT name FROM teams WHERE id = ?").bind(id).first();
@@ -214,8 +242,17 @@ async function teams(env, req, s, path, ch) {
     if (limited(req, 30, "snap")) return json({ error: "slow down" }, 429, ch);
     const b = await body();
     if (!b.doc || typeof b.doc !== "object") return json({ error: "bad request" }, 400, ch);
-    await env.DB.prepare("INSERT INTO snaps (team, sub, doc, updated) VALUES (?, ?, ?, ?) ON CONFLICT(team, sub) DO UPDATE SET doc = excluded.doc, updated = excluded.updated").bind(id, s.sub, await sealT(env, id, s.sub, b.doc), now).run();
-    return json({ updated: now }, 200, ch);
+    await shareInit(env);
+    // who besides the lead may read it: teammates by member id, checked against the team now (unknown ids are dropped)
+    let readers = [];
+    if (Array.isArray(b.to) && b.to.length) {
+      const want = [...new Set(b.to.map(String))].slice(0, MAX_MEMBERS), ok = new Set(((await env.DB.prepare("SELECT mid FROM members WHERE team = ? AND sub != ?").bind(id, s.sub).all()).results || []).map(x => x.mid));
+      readers = want.filter(m => ok.has(m));
+    }
+    await env.DB.prepare("INSERT INTO snaps (team, sub, doc, updated, readers) VALUES (?, ?, ?, ?, ?) ON CONFLICT(team, sub) DO UPDATE SET doc = excluded.doc, updated = excluded.updated, readers = excluded.readers").bind(id, s.sub, await sealT(env, id, s.sub, b.doc), now, JSON.stringify(readers)).run();
+    const nm = String(b.name || "").trim().slice(0, 40);
+    if (nm) await env.DB.prepare("UPDATE members SET nbox = ? WHERE team = ? AND sub = ?").bind(await sealT(env, id, s.sub, { name: nm }), id, s.sub).run();
+    return json({ updated: now, readers }, 200, ch);
   }
   if (parts.length === 3 && parts[2] === "snap" && M === "DELETE") { // stop sharing, stay on the team
     await env.DB.prepare("DELETE FROM snaps WHERE team = ? AND sub = ?").bind(id, s.sub).run();
