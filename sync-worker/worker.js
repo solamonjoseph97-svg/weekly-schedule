@@ -164,10 +164,13 @@ async function shareInit(env) { if (shareReady) return;
 const readersOf = r => { try { const a = JSON.parse(r || "[]"); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } };
 async function dropTeam(env, team) {
   await env.DB.prepare("DELETE FROM snaps WHERE team = ?").bind(team).run();
+  await boardInit(env); await env.DB.prepare("DELETE FROM boards WHERE team = ?").bind(team).run();
   await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM members WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(team).run();
 }
+const MAX_BOARD = 2000; let boardReady = false;
+async function boardInit(env) { if (boardReady) return; await env.DB.prepare("CREATE TABLE IF NOT EXISTS boards (team TEXT PRIMARY KEY, doc TEXT NOT NULL, updated INTEGER NOT NULL)").run(); boardReady = true; }
 async function teams(env, req, s, path, ch) {
   const parts = path.split("/").filter(Boolean), M = req.method, now = Date.now();
   const body = async () => { const t = await req.text(); if (t.length > MAX_SNAP) throw Object.assign(new Error("too large"), { status: 413 }); return t ? JSON.parse(t) : {}; };
@@ -295,6 +298,23 @@ async function teams(env, req, s, path, ch) {
     const invite = rnd(24);
     await env.DB.prepare("UPDATE teams SET invite_hash = ? WHERE id = ?").bind(await sha256(invite), id).run();
     return json({ invite }, 200, ch);
+  }
+  if (parts.length === 3 && parts[2] === "board") { // weekly draw notice: the lead writes it, every member reads it. Prize wording, team total, last winner's name; nothing per member but that
+    await boardInit(env);
+    if (M === "GET") {
+      const row = await env.DB.prepare("SELECT doc, updated FROM boards WHERE team = ?").bind(id).first();
+      if (!row) return json({ board: null }, 200, ch);
+      try { return json({ board: (await openT(env, id, "board", row.doc)).doc, updated: row.updated }, 200, ch); } catch (e) { return json({ board: null }, 200, ch); }
+    }
+    if (M === "PUT") {
+      if (!lead) return json({ error: "forbidden" }, 403, ch);
+      const b = await body();
+      if (!b.board || typeof b.board !== "object" || Array.isArray(b.board)) return json({ error: "bad request" }, 400, ch);
+      if (JSON.stringify(b.board).length > MAX_BOARD) return json({ error: "too large" }, 413, ch);
+      await env.DB.prepare("INSERT INTO boards (team, doc, updated) VALUES (?, ?, ?) ON CONFLICT(team) DO UPDATE SET doc = excluded.doc, updated = excluded.updated").bind(id, await sealT(env, id, "board", b.board), now).run();
+      return json({ ok: true }, 200, ch);
+    }
+    return json({ error: "not found" }, 404, ch);
   }
   if (parts.length === 3 && parts[2] === "name" && M === "PUT") {
     if (!lead) return json({ error: "forbidden" }, 403, ch);
