@@ -191,6 +191,7 @@ async function dropTeam(env, team) {
   await shareInit(env); await env.DB.prepare("DELETE FROM tpart WHERE team = ?").bind(team).run(); await env.DB.prepare("DELETE FROM rcodes WHERE team = ?").bind(team).run();
   await tmetInit(env); await env.DB.prepare("DELETE FROM tmetrics WHERE team = ?").bind(team).run();
   await rcInit(env); for (const t of ["recruits", "comps", "cscores"]) await env.DB.prepare(`DELETE FROM ${t} WHERE team = ?`).bind(team).run();
+  await bkInit(env); for (const t of ["avail", "bkg"]) await env.DB.prepare(`DELETE FROM ${t} WHERE team = ?`).bind(team).run();
   await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(team).run();
 }
 const MAX_BOARD = 2000; let boardReady = false;
@@ -201,6 +202,17 @@ async function tmetInit(env) { if (tmetReady) return; await env.DB.prepare("CREA
 // recruits: "Got coded ($199 paid)", approved by the nearest Marketing Director above the recruiter (or the team lead),
 // or by whoever runs a recruit competition the recruiter is in. Sealed; a phone already approved on this team is flagged.
 // competitions: top finishers / hit the goal / team goal, on one team number (or approved recruits, counted here, not by the phone).
+// booking time: your downline and accountability partners can ask for time on your calendar, inside the hours you set.
+// avail: your hours plus busy times only (never titles), sealed. bookings: a request, counter-offers, accept / decline / cancel, sealed.
+let bkReady = false;
+async function bkInit(env) { if (bkReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS avail (team TEXT NOT NULL, mid TEXT NOT NULL, box TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (team, mid))").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS bkg (team TEXT NOT NULL, id TEXT NOT NULL, a TEXT NOT NULL, b TEXT NOT NULL, state TEXT NOT NULL, turn TEXT, box TEXT NOT NULL, day TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (team, id))").run();
+  bkReady = true; }
+const BK_KINDS = ["checkin", "threeway", "training", "field", "strategy", "other"], BK_HOW = ["phone", "video", "person"];
+const hhmmOk = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || ""));
+function cleanHours(h) { if (!h || typeof h !== "object") return null; const days = (Array.isArray(h.days) ? h.days : []).map(Number).filter(d => d >= 0 && d <= 6);
+  if (!hhmmOk(h.from) || !hhmmOk(h.to) || h.to <= h.from) return null; return { days: [...new Set(days)].sort(), from: h.from, to: h.to, open: h.open !== false }; }
 let rcReady = false;
 async function rcInit(env) { if (rcReady) return;
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS recruits (team TEXT NOT NULL, id TEXT NOT NULL, by_mid TEXT NOT NULL, approver TEXT NOT NULL, state TEXT NOT NULL, box TEXT NOT NULL, phash TEXT, created INTEGER NOT NULL, decided INTEGER, PRIMARY KEY (team, id))").run();
@@ -459,6 +471,83 @@ async function teams(env, req, s, path, ch) {
       if (JSON.stringify(b.board).length > MAX_BOARD) return json({ error: "too large" }, 413, ch);
       await env.DB.prepare("INSERT INTO boards (team, doc, updated) VALUES (?, ?, ?) ON CONFLICT(team) DO UPDATE SET doc = excluded.doc, updated = excluded.updated").bind(id, await sealT(env, id, "board", b.board), now).run();
       return json({ ok: true }, 200, ch);
+    }
+    return json({ error: "not found" }, 404, ch);
+  }
+  if (parts[2] === "avail" || parts[2] === "bookings") {
+    await shareInit(env); await bkInit(env);
+    const all = (await env.DB.prepare("SELECT sub, mid, role, upline, level, nbox, pbox FROM members WHERE team = ?").bind(id).all()).results || [], T = treeOf(all), P = await partnersOf(env, id, me.mid);
+    const nameOf = async mid => { const m = all.find(x => x.mid === mid); if (!m) return "Teammate"; let nm = ""; if (m.pbox) { try { nm = String((await openT(env, id, m.sub, m.pbox)).doc.name || ""); } catch (e) { } } if (!nm && m.nbox) { try { nm = String((await openT(env, id, m.sub, m.nbox)).doc.name || ""); } catch (e) { } } return nm.slice(0, 40) || "Teammate"; };
+    const mayBook = to => to !== me.mid && all.some(x => x.mid === to) && (isAbove(T, to, me.mid) || P[to] === "yes"); // your uplines, and your partners
+    const today = new Date(now).toISOString().slice(0, 10);
+    if (parts[2] === "avail") {
+      if (parts.length === 3 && M === "PUT") { // my hours + busy times for the next few weeks
+        if (limited(req, 60, "avail")) return json({ error: "slow down" }, 429, ch);
+        const b = await body(), hours = cleanHours(b.hours); if (!hours) return json({ error: "bad hours" }, 400, ch);
+        const busy = {}; let n = 0; for (const [d, arr] of Object.entries(b.busy && typeof b.busy === "object" ? b.busy : {})) { if (!isoDay(d) || !Array.isArray(arr) || n > 60) continue; n++;
+          busy[d] = arr.slice(0, 60).map(x => [Math.max(0, Math.min(1440, Math.round(+x[0] || 0))), Math.max(0, Math.min(1440, Math.round(+x[1] || 0)))]).filter(x => x[1] > x[0]); }
+        await env.DB.prepare("INSERT INTO avail (team, mid, box, updated) VALUES (?, ?, ?, ?) ON CONFLICT(team, mid) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(id, me.mid, await sealT(env, id, "avail|" + me.mid, { hours, busy }), now).run();
+        return json({ ok: true }, 200, ch);
+      }
+      if (parts.length === 3 && M === "GET") { // who I can book, and my own hours
+        const rows = (await env.DB.prepare("SELECT mid, box FROM avail WHERE team = ?").bind(id).all()).results || [], out = []; let mine = null;
+        for (const r of rows) { let d; try { d = (await openT(env, id, "avail|" + r.mid, r.box)).doc; } catch (e) { continue; }
+          if (r.mid === me.mid) mine = d.hours; else if (mayBook(r.mid) && d.hours.open) out.push({ mid: r.mid, name: await nameOf(r.mid), why: P[r.mid] === "yes" ? "partner" : "upline" }); }
+        return json({ hours: mine, canBook: out }, 200, ch);
+      }
+      if (parts.length === 4 && M === "GET") { // their open hours and busy times (no titles); only for people I may book
+        const to = parts[3]; if (!mayBook(to)) return json({ error: "forbidden" }, 403, ch);
+        const r = await env.DB.prepare("SELECT box, updated FROM avail WHERE team = ? AND mid = ?").bind(id, to).first(); if (!r) return json({ hours: null, busy: {} }, 200, ch);
+        let d; try { d = (await openT(env, id, "avail|" + to, r.box)).doc; } catch (e) { return json({ hours: null, busy: {} }, 200, ch); }
+        if (!d.hours.open) return json({ hours: null, busy: {}, closed: true }, 200, ch);
+        const held = (await env.DB.prepare("SELECT box FROM bkg WHERE team = ? AND (a = ? OR b = ?) AND state IN ('pending','accepted') AND day >= ?").bind(id, to, to, today).all()).results || [];
+        const busy = JSON.parse(JSON.stringify(d.busy || {}));
+        for (const h of held) { try { const x = (await openT(env, id, "bkg", h.box)).doc; (busy[x.date] = busy[x.date] || []).push([x.start, x.start + x.dur]); } catch (e) { } }
+        return json({ hours: d.hours, busy, updated: r.updated, name: await nameOf(to) }, 200, ch);
+      }
+      return json({ error: "not found" }, 404, ch);
+    }
+    // bookings
+    const clean = b => { const date = isoDay(b.date), start = Math.round(+b.start), dur = Math.round(+b.dur);
+      if (!date || !(start >= 0 && start < 1440) || !(dur >= 5 && dur <= 240) || start + dur > 1440) return null;
+      const kind = BK_KINDS.includes(b.kind) ? b.kind : "other"; return { date, start, dur, kind, label: String(b.label || "").trim().slice(0, 40), note: String(b.note || "").trim().slice(0, 300), how: BK_HOW.includes(b.how) ? b.how : "phone" }; };
+    const subOf = mid => (all.find(x => x.mid === mid) || {}).sub;
+    const nice = x => { const d = new Date(x.date + "T12:00:00Z"), h = Math.floor(x.start / 60), m = x.start % 60; return `${d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })} ${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; };
+    if (parts.length === 3 && M === "POST") {
+      if (limited(req, 30, "bookings")) return json({ error: "slow down" }, 429, ch);
+      const b = await body(), to = String(b.to || ""); if (!mayBook(to)) return json({ error: "forbidden" }, 403, ch);
+      const x = clean(b); if (!x || x.date < today) return json({ error: "bad time" }, 400, ch);
+      const open = await env.DB.prepare("SELECT COUNT(*) AS n FROM bkg WHERE team = ? AND a = ? AND state = 'pending'").bind(id, me.mid).first(); if (open && open.n >= 20) return json({ error: "too many open requests" }, 409, ch);
+      const bid = "bk_" + rnd(12), doc = { ...x, hist: [{ by: me.mid, date: x.date, start: x.start, at: now }] };
+      await env.DB.prepare("INSERT INTO bkg (team, id, a, b, state, turn, box, day, created, updated) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)").bind(id, bid, me.mid, to, to, await sealT(env, id, "bkg", doc), x.date, now, now).run();
+      const s2 = subOf(to); if (s2) await pushTo(env, s2, { title: `${await nameOf(me.mid)} wants time with you`.slice(0, 60), body: `${nice(x)} · tap to accept or suggest another time`, url: "/app/#bookings", tag: "bk-" + bid.slice(3) });
+      return json({ id: bid, state: "pending" }, 200, ch);
+    }
+    if (parts.length === 3 && M === "GET") {
+      const rows = (await env.DB.prepare("SELECT id, a, b, state, turn, box, day, created, updated FROM bkg WHERE team = ? AND (a = ? OR b = ?)").bind(id, me.mid, me.mid).all()).results || [], out = [];
+      const old = new Date(now - 30 * 864e5).toISOString().slice(0, 10);
+      for (const r of rows) { if (r.day < old) continue; let d; try { d = (await openT(env, id, "bkg", r.box)).doc; } catch (e) { continue; }
+        const other = r.a === me.mid ? r.b : r.a; out.push({ id: r.id, mine: r.a === me.mid, other, otherName: await nameOf(other), state: r.state, myTurn: r.turn === me.mid, ...d, updated: r.updated }); }
+      out.sort((x, y) => (x.date + String(x.start).padStart(4, "0")).localeCompare(y.date + String(y.start).padStart(4, "0")));
+      return json({ bookings: out }, 200, ch);
+    }
+    if (parts.length === 4 && M === "POST") {
+      const r = await env.DB.prepare("SELECT id, a, b, state, turn, box FROM bkg WHERE team = ? AND id = ?").bind(id, parts[3]).first();
+      if (!r || (r.a !== me.mid && r.b !== me.mid)) return json({ error: "not found" }, 404, ch);
+      const b = await body(), act = String(b.action || ""), other = r.a === me.mid ? r.b : r.a; let d; try { d = (await openT(env, id, "bkg", r.box)).doc; } catch (e) { return json({ error: "not found" }, 404, ch); }
+      let state = r.state, turn = r.turn, msg = null;
+      if (act === "cancel") { if (!["pending", "accepted"].includes(r.state)) return json({ error: "closed" }, 409, ch); state = "cancelled"; turn = null; d.reason = String(b.reason || "").trim().slice(0, 140); msg = [`${await nameOf(me.mid)} cancelled`, nice(d)]; }
+      else { if (r.state !== "pending" || r.turn !== me.mid) return json({ error: "not your turn" }, 409, ch);
+        if (act === "accept") { state = "accepted"; turn = null; msg = [`${await nameOf(me.mid)} accepted`, `${nice(d)} is on both calendars`]; }
+        else if (act === "decline") { state = "declined"; turn = null; d.reason = String(b.reason || "").trim().slice(0, 140); msg = [`${await nameOf(me.mid)} can't make it`, d.reason || nice(d)]; }
+        else if (act === "counter") { const x = clean({ ...d, date: b.date, start: b.start, dur: b.dur || d.dur }); if (!x || x.date < today) return json({ error: "bad time" }, 400, ch);
+          d.date = x.date; d.start = x.start; d.dur = x.dur; d.reason = String(b.reason || "").trim().slice(0, 140); (d.hist = d.hist || []).push({ by: me.mid, date: x.date, start: x.start, at: now }); d.hist = d.hist.slice(-12);
+          turn = other; msg = [`${await nameOf(me.mid)} suggested another time`, `${nice(d)}${d.reason ? " · " + d.reason : ""}`]; }
+        else return json({ error: "bad action" }, 400, ch); }
+      d.last = me.mid;
+      await env.DB.prepare("UPDATE bkg SET state = ?, turn = ?, box = ?, day = ?, updated = ? WHERE team = ? AND id = ?").bind(state, turn, await sealT(env, id, "bkg", d), d.date, now, id, r.id).run();
+      const s2 = subOf(other); if (s2 && msg) await pushTo(env, s2, { title: msg[0].slice(0, 60), body: msg[1].slice(0, 120), url: "/app/#bookings", tag: "bk-" + r.id.slice(3) });
+      return json({ ok: true, state }, 200, ch);
     }
     return json({ error: "not found" }, 404, ch);
   }
