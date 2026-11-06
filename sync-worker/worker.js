@@ -190,6 +190,7 @@ async function dropTeam(env, team) {
   await env.DB.prepare("DELETE FROM members WHERE team = ?").bind(team).run();
   await shareInit(env); await env.DB.prepare("DELETE FROM tpart WHERE team = ?").bind(team).run(); await env.DB.prepare("DELETE FROM rcodes WHERE team = ?").bind(team).run();
   await tmetInit(env); await env.DB.prepare("DELETE FROM tmetrics WHERE team = ?").bind(team).run();
+  await rcInit(env); for (const t of ["recruits", "comps", "cscores"]) await env.DB.prepare(`DELETE FROM ${t} WHERE team = ?`).bind(team).run();
   await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(team).run();
 }
 const MAX_BOARD = 2000; let boardReady = false;
@@ -197,6 +198,34 @@ const MAX_BOARD = 2000; let boardReady = false;
 // (or their own, if they lead a branch), stopping at a released Marketing Director, who sets their branch's.
 let tmetReady = false;
 async function tmetInit(env) { if (tmetReady) return; await env.DB.prepare("CREATE TABLE IF NOT EXISTS tmetrics (team TEXT NOT NULL, mid TEXT NOT NULL, box TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (team, mid))").run(); tmetReady = true; }
+// recruits: "Got coded ($199 paid)", approved by the nearest Marketing Director above the recruiter (or the team lead),
+// or by whoever runs a recruit competition the recruiter is in. Sealed; a phone already approved on this team is flagged.
+// competitions: top finishers / hit the goal / team goal, on one team number (or approved recruits, counted here, not by the phone).
+let rcReady = false;
+async function rcInit(env) { if (rcReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS recruits (team TEXT NOT NULL, id TEXT NOT NULL, by_mid TEXT NOT NULL, approver TEXT NOT NULL, state TEXT NOT NULL, box TEXT NOT NULL, phash TEXT, created INTEGER NOT NULL, decided INTEGER, PRIMARY KEY (team, id))").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS comps (team TEXT NOT NULL, id TEXT NOT NULL, owner TEXT NOT NULL, box TEXT NOT NULL, starts TEXT NOT NULL, ends TEXT NOT NULL, created INTEGER NOT NULL, PRIMARY KEY (team, id))").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS cscores (team TEXT NOT NULL, comp TEXT NOT NULL, mid TEXT NOT NULL, value REAL NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (team, comp, mid))").run();
+  rcReady = true; }
+const PRIZE_PHOTO_MAX = 160_000;
+const prizePhotoOk = v => typeof v === "string" && v.length <= PRIZE_PHOTO_MAX && /^data:image\/(jpeg|webp|png);base64,[A-Za-z0-9+/=]+$/.test(v);
+const isoDay = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : "";
+function descendants(T, all, mid) { const out = new Set([mid]); let grew = true; while (grew) { grew = false; for (const m of all) if (!out.has(m.mid) && out.has(T.par[m.mid]) && !T.rel.has(m.mid)) { out.add(m.mid); grew = true; } } return out; }
+function recruitApprover(T, byMid) { // nearest released MD strictly above, else the team lead
+  let cur = T.par[byMid], n = 0; while (cur && n++ < 600) { if (T.rel.has(cur)) return cur; if (!T.par[cur]) return cur; cur = T.par[cur]; }
+  return T.root; }
+function cleanComp(b) {
+  const name = String(b.name || "").trim().slice(0, 50), metric = String(b.metric || "").trim().slice(0, 30), kind = ["rank", "mark", "team"].includes(b.kind) ? b.kind : "";
+  if (!name || !metric || !kind) return null;
+  const goal = Math.max(0, Math.min(1e9, +b.goal || 0)); if (kind !== "rank" && !(goal > 0)) return null;
+  const winners = Math.max(0, Math.min(50, Math.round(+b.winners || 0)));
+  const prizes = (Array.isArray(b.prizes) ? b.prizes : []).slice(0, 10).map(x => String(x || "").trim().slice(0, 80));
+  if (kind === "rank" && !prizes.filter(Boolean).length) return null;
+  const starts = isoDay(b.starts), ends = isoDay(b.ends); if (!starts || !ends || ends < starts) return null;
+  const scope = b.scope === "pick" ? "pick" : "tree", pick = scope === "pick" ? (Array.isArray(b.pick) ? b.pick : []).map(String).slice(0, 300) : [];
+  const unit = b.unit === "money" ? "money" : "count";
+  return { name, metric, kind, goal, winners, prizes, starts, ends, scope, pick, unit, photo: prizePhotoOk(b.photo) ? b.photo : "" };
+}
 const MET_FEEDS = ["", "met", "call", "text", "convo", "appt", "pres", "sale", "none"];
 function cleanMetrics(a) {
   if (!Array.isArray(a) || a.length > 12) return null; const out = [], seen = new Set();
@@ -429,6 +458,106 @@ async function teams(env, req, s, path, ch) {
       if (!b.board || typeof b.board !== "object" || Array.isArray(b.board)) return json({ error: "bad request" }, 400, ch);
       if (JSON.stringify(b.board).length > MAX_BOARD) return json({ error: "too large" }, 413, ch);
       await env.DB.prepare("INSERT INTO boards (team, doc, updated) VALUES (?, ?, ?) ON CONFLICT(team) DO UPDATE SET doc = excluded.doc, updated = excluded.updated").bind(id, await sealT(env, id, "board", b.board), now).run();
+      return json({ ok: true }, 200, ch);
+    }
+    return json({ error: "not found" }, 404, ch);
+  }
+  if (parts[2] === "recruits" || parts[2] === "comps") {
+    await shareInit(env); await rcInit(env);
+    const all = (await env.DB.prepare("SELECT sub, mid, role, upline, level, nbox, pbox FROM members WHERE team = ?").bind(id).all()).results || [], T = treeOf(all);
+    const nameOf = {}; for (const m of all) { let nm = ""; if (m.pbox) { try { nm = String((await openT(env, id, m.sub, m.pbox)).doc.name || ""); } catch (e) { } } if (!nm && m.nbox) { try { nm = String((await openT(env, id, m.sub, m.nbox)).doc.name || ""); } catch (e) { } } nameOf[m.mid] = nm.slice(0, 40) || "Teammate"; }
+    const today = new Date(now).toISOString().slice(0, 10);
+    const compRows = async () => { const rows = (await env.DB.prepare("SELECT id, owner, box, starts, ends, created FROM comps WHERE team = ?").bind(id).all()).results || [], out = [];
+      for (const r of rows) { try { const c = (await openT(env, id, "comp|" + r.id, r.box)).doc; out.push({ id: r.id, owner: r.owner, created: r.created, ...c }); } catch (e) { } } return out; };
+    const inComp = c => { const base = c.scope === "pick" ? new Set([c.owner, ...c.pick.filter(x => all.some(m => m.mid === x))]) : descendants(T, all, c.owner); return base; };
+    const recruitComps = async () => (await compRows()).filter(c => c.metric === "__recruits" && c.starts <= today && today <= c.ends);
+    if (parts[2] === "recruits") {
+      if (parts.length === 3 && M === "POST") {
+        if (limited(req, 20, "recruits")) return json({ error: "slow down" }, 429, ch);
+        const b = await body(), name = String(b.name || "").trim().slice(0, 60), phone = String(b.phone || "").replace(/[^0-9]/g, "").slice(-10);
+        if (!name || b.coded !== true) return json({ error: "a recruit needs a name and to be coded" }, 400, ch);
+        const photo = prizePhotoOk(b.photo) ? b.photo : "", note = String(b.note || "").trim().slice(0, 200), rid = "rc_" + rnd(12);
+        let approver = lead ? me.mid : recruitApprover(T, me.mid);
+        const phash = phone.length >= 7 ? await sha256(id + "|" + phone) : null;
+        const dup = phash ? !!(await env.DB.prepare("SELECT 1 FROM recruits WHERE team = ? AND phash = ? AND state = 'yes'").bind(id, phash).first()) : false;
+        const auto = lead; // the lead's own recruits need no one else's approval
+        await env.DB.prepare("INSERT INTO recruits (team, id, by_mid, approver, state, box, phash, created, decided) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, rid, me.mid, approver, auto && !dup ? "yes" : "pending", await sealT(env, id, "recruit|" + rid, { name, phone, note, photo, coded: true, pid: String(b.pid || "").slice(0, 40) }), phash, now, auto && !dup ? now : null).run();
+        return json({ id: rid, state: auto && !dup ? "yes" : "pending", approver, approverName: nameOf[approver] || "your team lead", dup }, 200, ch);
+      }
+      if (parts.length === 3 && M === "GET") {
+        const rows = (await env.DB.prepare("SELECT id, by_mid, approver, state, box, phash, created, decided FROM recruits WHERE team = ?").bind(id).all()).results || [];
+        const rcs = await recruitComps(), mine = [], toApprove = [], counts = {}, approvedP = new Set(rows.filter(r => r.state === "yes" && r.phash).map(r => r.phash));
+        for (const r of rows) {
+          if (r.state === "yes") counts[r.by_mid] = (counts[r.by_mid] || 0) + 1;
+          const canApprove = r.state === "pending" && (r.approver === me.mid || rcs.some(c => c.owner === me.mid && inComp(c).has(r.by_mid))) && r.by_mid !== me.mid;
+          if (r.by_mid !== me.mid && !canApprove) continue;
+          let d = {}; try { d = (await openT(env, id, "recruit|" + r.id, r.box)).doc || {}; } catch (e) { continue; }
+          const item = { id: r.id, state: r.state, name: d.name, phone: d.phone, note: d.note, photo: d.photo || "", pid: d.pid || "", by: r.by_mid, byName: nameOf[r.by_mid], approverName: nameOf[r.approver] || "", created: r.created, decided: r.decided, back: d.back || "" };
+          if (r.by_mid === me.mid) mine.push(item);
+          if (canApprove) toApprove.push({ ...item, dup: !!(r.phash && approvedP.has(r.phash)) });
+        }
+        return json({ mine, toApprove, counts }, 200, ch);
+      }
+      if (parts.length === 4 && M === "POST") {
+        const r = await env.DB.prepare("SELECT id, by_mid, approver, state, box FROM recruits WHERE team = ? AND id = ?").bind(id, parts[3]).first(); if (!r) return json({ error: "not found" }, 404, ch);
+        const rcs = await recruitComps(), can = r.state === "pending" && r.by_mid !== me.mid && (r.approver === me.mid || rcs.some(c => c.owner === me.mid && inComp(c).has(r.by_mid)));
+        if (!can) return json({ error: "forbidden" }, 403, ch);
+        const b = await body(), yes = b.decision === "yes";
+        let d = {}; try { d = (await openT(env, id, "recruit|" + r.id, r.box)).doc || {}; } catch (e) { }
+        if (!yes) d.back = String(b.note || "").trim().slice(0, 200);
+        await env.DB.prepare("UPDATE recruits SET state = ?, decided = ?, box = ? WHERE team = ? AND id = ?").bind(yes ? "yes" : "no", now, await sealT(env, id, "recruit|" + r.id, d), id, r.id).run();
+        return json({ ok: true, state: yes ? "yes" : "no" }, 200, ch);
+      }
+      if (parts.length === 4 && M === "DELETE") { // take back your own pending request
+        const r = await env.DB.prepare("SELECT by_mid, state FROM recruits WHERE team = ? AND id = ?").bind(id, parts[3]).first();
+        if (!r || r.by_mid !== me.mid || r.state === "yes") return json({ error: "not found" }, 404, ch);
+        await env.DB.prepare("DELETE FROM recruits WHERE team = ? AND id = ?").bind(id, parts[3]).run(); return json({ ok: true }, 200, ch);
+      }
+      return json({ error: "not found" }, 404, ch);
+    }
+    // competitions
+    const canRun = lead || T.rel.has(me.mid) || all.some(m => m.mid !== me.mid && T.par[m.mid] === me.mid);
+    if (parts.length === 3 && M === "GET") {
+      const cs = await compRows(), sc = (await env.DB.prepare("SELECT comp, mid, value, updated FROM cscores WHERE team = ?").bind(id).all()).results || [];
+      const rrows = (await env.DB.prepare("SELECT by_mid, decided FROM recruits WHERE team = ? AND state = 'yes'").bind(id).all()).results || [];
+      const out = [];
+      for (const c of cs) {
+        const ppl = inComp(c); if (!ppl.has(me.mid)) continue;
+        const endMs = Date.parse(c.ends + "T23:59:59Z") + 864e5, startMs = Date.parse(c.starts + "T00:00:00Z") - 864e5; // a day of slack either side for time zones
+        if (now > endMs + 30 * 864e5) continue; // finished more than a month ago
+        const rows = [...ppl].map(mid => { let v = 0, u = 0;
+          if (c.metric === "__recruits") { const mine = rrows.filter(r => r.by_mid === mid && r.decided >= startMs && r.decided <= endMs); v = mine.length; u = mine.reduce((a, r) => Math.max(a, r.decided), 0); }
+          else { const x = sc.find(z => z.comp === c.id && z.mid === mid); if (x) { v = x.value; u = x.updated; } }
+          return { mid, name: nameOf[mid] || "Teammate", value: v, updated: u, me: mid === me.mid }; });
+        out.push({ ...c, pick: undefined, mine: c.owner === me.mid, ownerName: nameOf[c.owner] || "", rows, status: today > c.ends ? "ended" : today < c.starts ? "soon" : "running" });
+      }
+      out.sort((a, b) => (a.status === "ended") - (b.status === "ended") || (a.ends < b.ends ? -1 : 1));
+      return json({ comps: out, canRun }, 200, ch);
+    }
+    if (parts.length === 3 && M === "POST") {
+      if (!canRun) return json({ error: "forbidden" }, 403, ch);
+      if (limited(req, 20, "comps")) return json({ error: "slow down" }, 429, ch);
+      const c = cleanComp(await body()); if (!c) return json({ error: "bad competition" }, 400, ch);
+      const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM comps WHERE team = ?").bind(id).first(); if (n && n.n >= 40) return json({ error: "too many competitions" }, 409, ch);
+      const cid = "cp_" + rnd(12); c.owner = me.mid;
+      await env.DB.prepare("INSERT INTO comps (team, id, owner, box, starts, ends, created) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id, cid, me.mid, await sealT(env, id, "comp|" + cid, c), c.starts, c.ends, now).run();
+      return json({ id: cid }, 200, ch);
+    }
+    const cid = parts[3], row = cid ? await env.DB.prepare("SELECT id, owner, box FROM comps WHERE team = ? AND id = ?").bind(id, cid).first() : null;
+    if (!row) return json({ error: "not found" }, 404, ch);
+    if (parts.length === 4 && (M === "PUT" || M === "DELETE")) {
+      if (row.owner !== me.mid) return json({ error: "forbidden" }, 403, ch);
+      if (M === "DELETE") { await env.DB.prepare("DELETE FROM comps WHERE team = ? AND id = ?").bind(id, cid).run(); await env.DB.prepare("DELETE FROM cscores WHERE team = ? AND comp = ?").bind(id, cid).run(); return json({ ok: true }, 200, ch); }
+      const c = cleanComp(await body()); if (!c) return json({ error: "bad competition" }, 400, ch); c.owner = me.mid;
+      await env.DB.prepare("UPDATE comps SET box = ?, starts = ?, ends = ? WHERE team = ? AND id = ?").bind(await sealT(env, id, "comp|" + cid, c), c.starts, c.ends, id, cid).run();
+      return json({ ok: true }, 200, ch);
+    }
+    if (parts.length === 5 && parts[4] === "score" && M === "PUT") { // a participant reports their own total for this one number
+      let c; try { c = (await openT(env, id, "comp|" + cid, row.box)).doc; } catch (e) { return json({ error: "not found" }, 404, ch); }
+      c.owner = row.owner; if (!inComp(c).has(me.mid) || c.metric === "__recruits") return json({ error: "forbidden" }, 403, ch);
+      if (today > c.ends || today < c.starts) return json({ error: "not running" }, 409, ch);
+      const v = Math.max(0, Math.min(1e9, +(await body()).value || 0));
+      await env.DB.prepare("INSERT INTO cscores (team, comp, mid, value, updated) VALUES (?, ?, ?, ?, ?) ON CONFLICT(team, comp, mid) DO UPDATE SET value = excluded.value, updated = CASE WHEN excluded.value <> cscores.value THEN excluded.updated ELSE cscores.updated END").bind(id, cid, me.mid, v, now).run();
       return json({ ok: true }, 200, ch);
     }
     return json({ error: "not found" }, 404, ch);
