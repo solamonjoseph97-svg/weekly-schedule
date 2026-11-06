@@ -202,7 +202,7 @@ async function tmetInit(env) { if (tmetReady) return; await env.DB.prepare("CREA
 // recruits: "Got coded ($199 paid)", approved by the nearest Marketing Director above the recruiter (or the team lead),
 // or by whoever runs a recruit competition the recruiter is in. Sealed; a phone already approved on this team is flagged.
 // competitions: top finishers / hit the goal / team goal, on one team number (or approved recruits, counted here, not by the phone).
-// booking time: your downline and accountability partners can ask for time on your calendar, inside the hours you set.
+// booking time: your uplines, your downline and your accountability partners can ask for time on your calendar, inside the hours you set.
 // avail: your hours plus busy times only (never titles), sealed. bookings: a request, counter-offers, accept / decline / cancel, sealed.
 let bkReady = false;
 async function bkInit(env) { if (bkReady) return;
@@ -478,7 +478,7 @@ async function teams(env, req, s, path, ch) {
     await shareInit(env); await bkInit(env);
     const all = (await env.DB.prepare("SELECT sub, mid, role, upline, level, nbox, pbox FROM members WHERE team = ?").bind(id).all()).results || [], T = treeOf(all), P = await partnersOf(env, id, me.mid);
     const nameOf = async mid => { const m = all.find(x => x.mid === mid); if (!m) return "Teammate"; let nm = ""; if (m.pbox) { try { nm = String((await openT(env, id, m.sub, m.pbox)).doc.name || ""); } catch (e) { } } if (!nm && m.nbox) { try { nm = String((await openT(env, id, m.sub, m.nbox)).doc.name || ""); } catch (e) { } } return nm.slice(0, 40) || "Teammate"; };
-    const mayBook = to => to !== me.mid && all.some(x => x.mid === to) && (isAbove(T, to, me.mid) || P[to] === "yes"); // your uplines, and your partners
+    const mayBook = to => to !== me.mid && all.some(x => x.mid === to) && (isAbove(T, to, me.mid) || isAbove(T, me.mid, to) || P[to] === "yes"); // your uplines, your downline, and your partners
     const today = new Date(now).toISOString().slice(0, 10);
     if (parts[2] === "avail") {
       if (parts.length === 3 && M === "PUT") { // my hours + busy times for the next few weeks
@@ -492,7 +492,7 @@ async function teams(env, req, s, path, ch) {
       if (parts.length === 3 && M === "GET") { // who I can book, and my own hours
         const rows = (await env.DB.prepare("SELECT mid, box FROM avail WHERE team = ?").bind(id).all()).results || [], out = []; let mine = null;
         for (const r of rows) { let d; try { d = (await openT(env, id, "avail|" + r.mid, r.box)).doc; } catch (e) { continue; }
-          if (r.mid === me.mid) mine = d.hours; else if (mayBook(r.mid) && d.hours.open) out.push({ mid: r.mid, name: await nameOf(r.mid), why: P[r.mid] === "yes" ? "partner" : "upline" }); }
+          if (r.mid === me.mid) mine = d.hours; else if (mayBook(r.mid) && d.hours.open) out.push({ mid: r.mid, name: await nameOf(r.mid), why: P[r.mid] === "yes" ? "partner" : isAbove(T, r.mid, me.mid) ? "upline" : "downline" }); }
         return json({ hours: mine, canBook: out }, 200, ch);
       }
       if (parts.length === 4 && M === "GET") { // their open hours and busy times (no titles); only for people I may book
