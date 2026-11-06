@@ -189,9 +189,26 @@ async function dropTeam(env, team) {
   await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM members WHERE team = ?").bind(team).run();
   await shareInit(env); await env.DB.prepare("DELETE FROM tpart WHERE team = ?").bind(team).run(); await env.DB.prepare("DELETE FROM rcodes WHERE team = ?").bind(team).run();
+  await tmetInit(env); await env.DB.prepare("DELETE FROM tmetrics WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(team).run();
 }
 const MAX_BOARD = 2000; let boardReady = false;
+// team metrics: the lead sets the team's; any upline can set their own branch's. A member uses the nearest set above them
+// (or their own, if they lead a branch), stopping at a released Marketing Director, who sets their branch's.
+let tmetReady = false;
+async function tmetInit(env) { if (tmetReady) return; await env.DB.prepare("CREATE TABLE IF NOT EXISTS tmetrics (team TEXT NOT NULL, mid TEXT NOT NULL, box TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (team, mid))").run(); tmetReady = true; }
+const MET_FEEDS = ["", "met", "call", "text", "convo", "appt", "pres", "sale", "none"];
+function cleanMetrics(a) {
+  if (!Array.isArray(a) || a.length > 12) return null; const out = [], seen = new Set();
+  for (const x of a) {
+    if (!x || typeof x !== "object") return null; const name = String(x.name || "").trim().slice(0, 30); if (!name || seen.has(name.toLowerCase())) return null; seen.add(name.toLowerCase());
+    const target = Math.max(0, Math.min(1e7, Math.round(+x.target || 0))), unit = x.unit === "money" ? "money" : "count", feed = MET_FEEDS.includes(String(x.feed || "")) ? String(x.feed || "") : "";
+    const m = { name, target, unit, feed };
+    if (x.comp && typeof x.comp === "object") { const ct = Math.max(0, Math.min(1e8, Math.round(+x.comp.target || 0))), prize = String(x.comp.prize || "").trim().slice(0, 80), ends = /^\d{4}-\d{2}-\d{2}$/.test(String(x.comp.ends || "")) ? String(x.comp.ends) : ""; if (ct > 0) m.comp = { target: ct, prize, ends }; }
+    out.push(m);
+  }
+  return out;
+}
 async function boardInit(env) { if (boardReady) return; await env.DB.prepare("CREATE TABLE IF NOT EXISTS boards (team TEXT PRIMARY KEY, doc TEXT NOT NULL, updated INTEGER NOT NULL)").run(); boardReady = true; }
 async function teams(env, req, s, path, ch) {
   const parts = path.split("/").filter(Boolean), M = req.method, now = Date.now();
@@ -416,6 +433,30 @@ async function teams(env, req, s, path, ch) {
     }
     return json({ error: "not found" }, 404, ch);
   }
+  if (parts.length === 3 && parts[2] === "metrics") {
+    await shareInit(env); await tmetInit(env);
+    const all = (await env.DB.prepare("SELECT mid, role, upline, level FROM members WHERE team = ?").bind(id).all()).results || [], T = treeOf(all);
+    const leadsBranch = all.some(m => m.mid !== me.mid && (T.par[m.mid] === me.mid)); // has anyone directly under them
+    if (M === "GET") {
+      const rows = (await env.DB.prepare("SELECT mid, box, updated FROM tmetrics WHERE team = ?").bind(id).all()).results || [], by = {};
+      for (const r of rows) { try { by[r.mid] = { metrics: (await openT(env, id, "metrics|" + r.mid, r.box)).doc, updated: r.updated }; } catch (e) { } }
+      // nearest set: me (only if I lead a branch), then each upline, stopping at a released MD
+      let use = null, from = null, cur = me.mid, n = 0;
+      if ((leadsBranch || T.rel.has(cur) || cur === T.root) && by[cur]) { use = by[cur]; from = cur; }
+      // walk up; a released MD's branch never inherits from above the MD
+      while (!use && !T.rel.has(cur) && n++ < 600) { const p = T.par[cur]; if (!p) break; if (by[p]) { use = by[p]; from = p; } cur = p; }
+      return json({ metrics: use ? use.metrics : null, from, updated: use ? use.updated : 0, mine: by[me.mid] ? by[me.mid].metrics : null, canEdit: lead || leadsBranch || T.rel.has(me.mid) }, 200, ch);
+    }
+    if (M === "PUT") {
+      if (!(lead || leadsBranch || T.rel.has(me.mid))) return json({ error: "forbidden" }, 403, ch);
+      const b = await body();
+      if (b.metrics === null) { await env.DB.prepare("DELETE FROM tmetrics WHERE team = ? AND mid = ?").bind(id, me.mid).run(); return json({ ok: true }, 200, ch); }
+      const ms = cleanMetrics(b.metrics); if (!ms) return json({ error: "bad metrics" }, 400, ch);
+      await env.DB.prepare("INSERT INTO tmetrics (team, mid, box, updated) VALUES (?, ?, ?, ?) ON CONFLICT(team, mid) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(id, me.mid, await sealT(env, id, "metrics|" + me.mid, ms), now).run();
+      return json({ ok: true, metrics: ms }, 200, ch);
+    }
+    return json({ error: "not found" }, 404, ch);
+  }
   if (parts.length === 3 && parts[2] === "name" && M === "PUT") {
     if (!lead) return json({ error: "forbidden" }, 403, ch);
     const b = await body();
@@ -433,7 +474,7 @@ async function teams(env, req, s, path, ch) {
     const tm = await env.DB.prepare("SELECT mid, upline FROM members WHERE team = ? AND sub = ?").bind(id, target.sub).first();
     if (tm) { await env.DB.prepare("UPDATE members SET upline = ? WHERE team = ? AND upline = ?").bind(tm.upline || null, id, tm.mid).run(); // their recruits move up to their upline
       await env.DB.prepare("DELETE FROM tpart WHERE team = ? AND (a = ? OR b = ?)").bind(id, tm.mid, tm.mid).run();
-      await env.DB.prepare("DELETE FROM rcodes WHERE team = ? AND mid = ?").bind(id, tm.mid).run(); }
+      await env.DB.prepare("DELETE FROM rcodes WHERE team = ? AND mid = ?").bind(id, tm.mid).run(); await tmetInit(env); await env.DB.prepare("DELETE FROM tmetrics WHERE team = ? AND mid = ?").bind(id, tm.mid).run(); }
     await env.DB.prepare("DELETE FROM members WHERE team = ? AND sub = ?").bind(id, target.sub).run();
     return json({ ok: true }, 200, ch);
   }
