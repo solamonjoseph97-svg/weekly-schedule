@@ -35,3 +35,6 @@ CREATE INDEX IF NOT EXISTS psnaps_age ON psnaps (created);
 CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, at INTEGER NOT NULL, sub TEXT NOT NULL, box TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, meta TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS feedback_at ON feedback (at);
 CREATE TABLE IF NOT EXISTS admins (sub TEXT PRIMARY KEY, seen INTEGER NOT NULL);
+
+-- Weekly draw notice per team (sealed). The server also creates this itself on first use.
+CREATE TABLE IF NOT EXISTS boards (team TEXT PRIMARY KEY, doc TEXT NOT NULL, updated INTEGER NOT NULL);
