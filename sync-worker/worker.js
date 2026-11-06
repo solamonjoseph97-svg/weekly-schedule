@@ -168,6 +168,7 @@ async function shareInit(env) { if (shareReady) return;
 const LEVELS = [30, 40, 50, 60, 70];
 // A Marketing Director (70% and up) is released from their upline: nobody above them sees them or their branch, or
 // changes their level; they lead their own branch and set their own percentage above 70.
+// The team lead has no upline: their level starts unset and they set it themselves (it isn't assumed to be 70).
 const RELEASE = 70;
 function treeOf(ms) { // ms: [{mid, role, upline, level}] -> parent map with the lead as root, cycles and strays re-parented to the lead
   const root = (ms.find(m => m.role === "lead") || {}).mid, ids = new Set(ms.map(m => m.mid)), par = {}, rel = new Set(ms.filter(m => m.role !== "lead" && (+m.level || 0) >= RELEASE).map(m => m.mid));
@@ -242,7 +243,7 @@ async function teams(env, req, s, path, ch) {
       let pr = {}; if (m.pbox) { try { pr = (await openT(env, id, m.sub, m.pbox)).doc || {}; } catch { pr = {}; } }
       let name = String(pr.name || ""); if (!name && m.nbox) { try { name = String((await openT(env, id, m.sub, m.nbox)).doc.name || ""); } catch { name = ""; } }
       const mine = m.sub === s.sub, above = isAbove(T, me.mid, m.mid);
-      out.push({ mid: m.mid, role: m.role, upline: T.par[m.mid], released: T.rel.has(m.mid), level: m.level || (m.role === "lead" ? 70 : 30), name: name.slice(0, 40), photo: photoOk(pr.photo) ? pr.photo : "",
+      out.push({ mid: m.mid, role: m.role, upline: T.par[m.mid], released: T.rel.has(m.mid), level: m.level || (m.role === "lead" ? null : 30), name: name.slice(0, 40), photo: photoOk(pr.photo) ? pr.photo : "",
         phone: String(pr.phone || "").slice(0, 24), email: String(pr.email || "").slice(0, 80), joined: m.joined || null, me: mine,
         partner: mine ? "" : P[m.mid] || "", canSee: !mine && (above || P[m.mid] === "yes" || readersOf(m.readers).includes(me.mid)),
         canEdit: mine ? (m.role === "lead" || T.rel.has(m.mid)) : above, sharesWithMe: !mine && (above || P[m.mid] === "yes" || readersOf(m.readers).includes(me.mid)) });
@@ -275,8 +276,8 @@ async function teams(env, req, s, path, ch) {
     await shareInit(env); const b = await body();
     const ms = (await env.DB.prepare("SELECT mid, role, upline, level FROM members WHERE team = ?").bind(id).all()).results || [], T = treeOf(ms), tg = ms.find(m => m.mid === parts[3]);
     if (!tg) return json({ error: "not found" }, 404, ch);
-    if (tg.mid === me.mid) { // only a lead or a released MD sets their own percentage, and only 70 and up
-      const lv = Math.round(+b.level); if (!(tg.role === "lead" || T.rel.has(tg.mid)) || b.upline !== undefined || !(lv >= RELEASE && lv <= 150)) return json({ error: "forbidden" }, 403, ch);
+    if (tg.mid === me.mid) { // the team lead has no upline, so they set their own level (any, 30 and up); a released MD sets their own, 70 and up
+      const lv = Math.round(+b.level), lo = tg.role === "lead" ? 30 : RELEASE; if (!(tg.role === "lead" || T.rel.has(tg.mid)) || b.upline !== undefined || !(lv >= lo && lv <= 150)) return json({ error: "forbidden" }, 403, ch);
       await env.DB.prepare("UPDATE members SET level = ? WHERE team = ? AND mid = ?").bind(lv, id, tg.mid).run(); return json({ ok: true }, 200, ch); }
     if (tg.role === "lead") return json({ error: "not found" }, 404, ch);
     if (!isAbove(T, me.mid, tg.mid)) return json({ error: "forbidden" }, 403, ch);
