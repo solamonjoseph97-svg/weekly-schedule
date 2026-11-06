@@ -159,14 +159,35 @@ async function memberOf(env, team, sub) { return env.DB.prepare("SELECT role, mi
 // member's display name is kept sealed so teammates can be shown by name. Added columns, created on first use.
 let shareReady = false;
 async function shareInit(env) { if (shareReady) return;
-  for (const q of ["ALTER TABLE snaps ADD COLUMN readers TEXT", "ALTER TABLE members ADD COLUMN nbox TEXT"]) { try { await env.DB.prepare(q).run(); } catch (e) { /* already there */ } }
+  for (const q of ["ALTER TABLE snaps ADD COLUMN readers TEXT", "ALTER TABLE members ADD COLUMN nbox TEXT", "ALTER TABLE members ADD COLUMN upline TEXT", "ALTER TABLE members ADD COLUMN level INTEGER", "ALTER TABLE members ADD COLUMN pbox TEXT", "ALTER TABLE teams ADD COLUMN cbox TEXT"]) { try { await env.DB.prepare(q).run(); } catch (e) { /* already there */ } }
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS tpart (team TEXT NOT NULL, a TEXT NOT NULL, b TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (team, a, b))").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS rcodes (team TEXT NOT NULL, mid TEXT NOT NULL, hash TEXT NOT NULL, created INTEGER NOT NULL, PRIMARY KEY (team, mid))").run();
   shareReady = true; }
+// The team is a tree: each member's upline is who recruited them (the lead when unknown). Anyone with recruits leads
+// that branch: every upline sees their whole branch's shared copies. Peers see each other only as accepted partners.
+const LEVELS = [30, 40, 50, 60, 70];
+// A Marketing Director (70% and up) is released from their upline: nobody above them sees them or their branch, or
+// changes their level; they lead their own branch and set their own percentage above 70.
+const RELEASE = 70;
+function treeOf(ms) { // ms: [{mid, role, upline, level}] -> parent map with the lead as root, cycles and strays re-parented to the lead
+  const root = (ms.find(m => m.role === "lead") || {}).mid, ids = new Set(ms.map(m => m.mid)), par = {}, rel = new Set(ms.filter(m => m.role !== "lead" && (+m.level || 0) >= RELEASE).map(m => m.mid));
+  for (const m of ms) par[m.mid] = m.mid === root ? null : (m.upline && ids.has(m.upline) && m.upline !== m.mid ? m.upline : root);
+  for (const m of ms) { let x = par[m.mid], n = 0; while (x && n < 600) { if (x === m.mid) { par[m.mid] = root; break; } x = par[x]; n++; } }
+  return { root, par, rel };
+}
+// is `up` above `mid` with nobody released in between (a released MD is out of reach of everyone above them)
+const isAbove = (T, up, mid) => { let cur = mid, n = 0; while (n++ < 600) { if (T.rel.has(cur)) return false; const p = T.par[cur]; if (!p) return false; if (p === up) return true; cur = p; } return false; };
+async function partnersOf(env, team, mid) { const r = (await env.DB.prepare("SELECT a, b, state FROM tpart WHERE team = ? AND (a = ? OR b = ?)").bind(team, mid, mid).all()).results || [];
+  const o = {}; for (const x of r) { const other = x.a === mid ? x.b : x.a; o[other] = x.state === "yes" ? "yes" : x.a === mid ? "out" : "in"; } return o; }
+const PHOTO_MAX = 90_000; // a small JPEG or WebP as a data URL; the app shrinks pictures before sending
+const photoOk = v => typeof v === "string" && v.length <= PHOTO_MAX && /^data:image\/(jpeg|webp|png);base64,[A-Za-z0-9+/=]+$/.test(v);
 const readersOf = r => { try { const a = JSON.parse(r || "[]"); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } };
 async function dropTeam(env, team) {
   await env.DB.prepare("DELETE FROM snaps WHERE team = ?").bind(team).run();
   await boardInit(env); await env.DB.prepare("DELETE FROM boards WHERE team = ?").bind(team).run();
   await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM members WHERE team = ?").bind(team).run();
+  await shareInit(env); await env.DB.prepare("DELETE FROM tpart WHERE team = ?").bind(team).run(); await env.DB.prepare("DELETE FROM rcodes WHERE team = ?").bind(team).run();
   await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(team).run();
 }
 const MAX_BOARD = 2000; let boardReady = false;
@@ -192,13 +213,17 @@ async function teams(env, req, s, path, ch) {
     if (limited(req, 20, "teams")) return json({ error: "slow down" }, 429, ch);
     const b = await body(), id = String(b.team || ""), inv = String(b.invite || "");
     const t = teamIdOk(id) && inv.length >= 20 ? await env.DB.prepare("SELECT id, name, invite_hash FROM teams WHERE id = ?").bind(id).first() : null;
-    if (!t || (await sha256(inv)) !== t.invite_hash) return json({ error: "invite not valid" }, 403, ch);
+    let recruiter = null;
+    if (t && (await sha256(inv)) !== t.invite_hash) { await shareInit(env); const rc = await env.DB.prepare("SELECT r.mid AS mid FROM rcodes r JOIN members m ON m.team = r.team AND m.mid = r.mid WHERE r.team = ? AND r.hash = ?").bind(id, await sha256(inv)).first(); recruiter = rc ? rc.mid : null; }
+    if (!t || ((await sha256(inv)) !== t.invite_hash && !recruiter)) return json({ error: "invite not valid" }, 403, ch);
     const had = await memberOf(env, id, s.sub);
     if (had) return json({ id, name: t.name, role: had.role, mid: had.mid }, 200, ch);
     const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE team = ?").bind(id).first();
     if (n && n.n >= MAX_MEMBERS) return json({ error: "team full" }, 403, ch);
     const mid = "mb_" + rnd(12);
     await env.DB.prepare("INSERT INTO members (team, sub, mid, role, joined) VALUES (?, ?, ?, 'member', ?)").bind(id, s.sub, mid, now).run();
+    // the invite link can say who shared it: they become the new member's upline (checked: must be on this team)
+    const by = recruiter || String(b.by || ""); if (by) { await shareInit(env); const up = await env.DB.prepare("SELECT mid FROM members WHERE team = ? AND mid = ?").bind(id, by).first(); if (up) await env.DB.prepare("UPDATE members SET upline = ?, level = 30 WHERE team = ? AND sub = ?").bind(up.mid, id, s.sub).run(); }
     return json({ id, name: t.name, role: "member", mid }, 200, ch);
   }
   const id = parts[1];
@@ -207,24 +232,96 @@ async function teams(env, req, s, path, ch) {
   if (!me) return json({ error: "not found" }, 404, ch); // never reveal whether a team exists to outsiders
   const lead = me.role === "lead";
   if (parts[2] === "proofs") return proofRoutes(env, req, s, id, me, parts, ch);
-  if (parts.length === 3 && parts[2] === "roster" && M === "GET") { // any member: who's on the team (names only), for choosing who to share with
+  if (parts.length === 3 && parts[2] === "roster" && M === "GET") { // any member: the team tree with names, photos, levels and (if they chose) phone/email
     await shareInit(env);
-    const ms = (await env.DB.prepare("SELECT m.sub AS sub, m.mid AS mid, m.role AS role, m.nbox AS nbox, s.readers AS readers FROM members m LEFT JOIN snaps s ON s.team = m.team AND s.sub = m.sub WHERE m.team = ?").bind(id).all()).results || [];
+    const ms = (await env.DB.prepare("SELECT m.sub AS sub, m.mid AS mid, m.role AS role, m.nbox AS nbox, m.pbox AS pbox, m.upline AS upline, m.level AS level, m.joined AS joined, s.readers AS readers FROM members m LEFT JOIN snaps s ON s.team = m.team AND s.sub = m.sub WHERE m.team = ?").bind(id).all()).results || [];
+    const T = treeOf(ms), P = await partnersOf(env, id, me.mid), t = await env.DB.prepare("SELECT name, cbox FROM teams WHERE id = ?").bind(id).first();
+    let crest = ""; if (t && t.cbox) { try { crest = (await openT(env, id, "crest", t.cbox)).doc.image || ""; } catch { crest = ""; } }
     const out = [];
     for (const m of ms) {
-      let name = ""; if (m.nbox) { try { name = String((await openT(env, id, m.sub, m.nbox)).doc.name || "").slice(0, 40); } catch { name = ""; } }
-      out.push({ mid: m.mid, role: m.role, name, me: m.sub === s.sub, sharesWithMe: m.sub !== s.sub && (lead || readersOf(m.readers).includes(me.mid)) });
+      let pr = {}; if (m.pbox) { try { pr = (await openT(env, id, m.sub, m.pbox)).doc || {}; } catch { pr = {}; } }
+      let name = String(pr.name || ""); if (!name && m.nbox) { try { name = String((await openT(env, id, m.sub, m.nbox)).doc.name || ""); } catch { name = ""; } }
+      const mine = m.sub === s.sub, above = isAbove(T, me.mid, m.mid);
+      out.push({ mid: m.mid, role: m.role, upline: T.par[m.mid], released: T.rel.has(m.mid), level: m.level || (m.role === "lead" ? 70 : 30), name: name.slice(0, 40), photo: photoOk(pr.photo) ? pr.photo : "",
+        phone: String(pr.phone || "").slice(0, 24), email: String(pr.email || "").slice(0, 80), joined: m.joined || null, me: mine,
+        partner: mine ? "" : P[m.mid] || "", canSee: !mine && (above || P[m.mid] === "yes" || readersOf(m.readers).includes(me.mid)),
+        canEdit: mine ? (m.role === "lead" || T.rel.has(m.mid)) : above, sharesWithMe: !mine && (above || P[m.mid] === "yes" || readersOf(m.readers).includes(me.mid)) });
     }
-    return json({ members: out }, 200, ch);
+    return json({ team: { name: t ? t.name : "Team", crest }, root: T.root, me: me.mid, members: out }, 200, ch);
+  }
+  if (parts.length === 3 && parts[2] === "recruit" && M === "POST") { // any member: a personal invite; whoever joins with it is placed under them. A new one replaces the old.
+    if (limited(req, 10, "recruit")) return json({ error: "slow down" }, 429, ch);
+    await shareInit(env); const code = rnd(24);
+    await env.DB.prepare("INSERT INTO rcodes (team, mid, hash, created) VALUES (?, ?, ?, ?) ON CONFLICT(team, mid) DO UPDATE SET hash = excluded.hash, created = excluded.created").bind(id, me.mid, await sha256(code), now).run();
+    return json({ invite: code }, 200, ch);
+  }
+  if (parts.length === 3 && parts[2] === "profile" && M === "PUT") { // my card: name, photo, and phone/email only if I chose to show them
+    if (limited(req, 30, "profile")) return json({ error: "slow down" }, 429, ch);
+    await shareInit(env); const b = await body();
+    if (b.photo && !photoOk(b.photo)) return json({ error: "photo too large" }, 413, ch);
+    const pr = { name: String(b.name || "").trim().slice(0, 40), photo: b.photo || "", phone: String(b.phone || "").replace(/[^0-9+()\- .]/g, "").slice(0, 24), email: /^[^@\s]{1,64}@[^@\s]{1,80}$/.test(String(b.email || "")) ? String(b.email).slice(0, 80) : "" };
+    await env.DB.prepare("UPDATE members SET pbox = ?, nbox = ? WHERE team = ? AND sub = ?").bind(await sealT(env, id, s.sub, pr), pr.name ? await sealT(env, id, s.sub, { name: pr.name }) : null, id, s.sub).run();
+    return json({ ok: true }, 200, ch);
+  }
+  if (parts.length === 3 && parts[2] === "crest" && M === "PUT") { // lead: team picture and name
+    if (!lead) return json({ error: "forbidden" }, 403, ch);
+    await shareInit(env); const b = await body();
+    if (b.image && !photoOk(b.image)) return json({ error: "photo too large" }, 413, ch);
+    if (b.image !== undefined) await env.DB.prepare("UPDATE teams SET cbox = ? WHERE id = ?").bind(b.image ? await sealT(env, id, "crest", { image: b.image }) : null, id).run();
+    const nm = String(b.name || "").trim().slice(0, 40); if (nm) await env.DB.prepare("UPDATE teams SET name = ? WHERE id = ?").bind(nm, id).run();
+    return json({ ok: true }, 200, ch);
+  }
+  if (parts.length === 4 && parts[2] === "members" && M === "PUT") { // an upline sets a downline member's contract level, or moves them under someone in their branch
+    await shareInit(env); const b = await body();
+    const ms = (await env.DB.prepare("SELECT mid, role, upline, level FROM members WHERE team = ?").bind(id).all()).results || [], T = treeOf(ms), tg = ms.find(m => m.mid === parts[3]);
+    if (!tg) return json({ error: "not found" }, 404, ch);
+    if (tg.mid === me.mid) { // only a lead or a released MD sets their own percentage, and only 70 and up
+      const lv = Math.round(+b.level); if (!(tg.role === "lead" || T.rel.has(tg.mid)) || b.upline !== undefined || !(lv >= RELEASE && lv <= 150)) return json({ error: "forbidden" }, 403, ch);
+      await env.DB.prepare("UPDATE members SET level = ? WHERE team = ? AND mid = ?").bind(lv, id, tg.mid).run(); return json({ ok: true }, 200, ch); }
+    if (tg.role === "lead") return json({ error: "not found" }, 404, ch);
+    if (!isAbove(T, me.mid, tg.mid)) return json({ error: "forbidden" }, 403, ch);
+    if (b.level !== undefined) { const lv = Math.round(+b.level); if (!(lv >= 30 && lv <= 150)) return json({ error: "bad level" }, 400, ch);
+      await env.DB.prepare("UPDATE members SET level = ? WHERE team = ? AND mid = ?").bind(lv, id, tg.mid).run(); }
+    if (b.upline !== undefined) { const nu = String(b.upline);
+      if (!ms.some(m => m.mid === nu) || nu === tg.mid || isAbove(T, tg.mid, nu)) return json({ error: "bad upline" }, 400, ch); // not themselves, not someone under them
+      if (!(nu === me.mid || isAbove(T, me.mid, nu))) return json({ error: "forbidden" }, 403, ch); // only within your own branch
+      await env.DB.prepare("UPDATE members SET upline = ? WHERE team = ? AND mid = ?").bind(nu, id, tg.mid).run(); }
+    return json({ ok: true }, 200, ch);
+  }
+  if (parts[2] === "partners" && parts.length >= 4) { // accountability partners inside a team: ask, accept, end
+    await shareInit(env); const other = parts[3];
+    const o = await env.DB.prepare("SELECT mid FROM members WHERE team = ? AND mid = ?").bind(id, other).first();
+    if (!o || other === me.mid) return json({ error: "not found" }, 404, ch);
+    const ab = await env.DB.prepare("SELECT a, b, state FROM tpart WHERE team = ? AND ((a = ? AND b = ?) OR (a = ? AND b = ?))").bind(id, me.mid, other, other, me.mid).first();
+    if (parts.length === 4 && M === "POST") { // ask (or, if they already asked me, this accepts)
+      if (limited(req, 20, "tpart")) return json({ error: "slow down" }, 429, ch);
+      if (ab && ab.state === "yes") return json({ state: "yes" }, 200, ch);
+      if (ab && ab.a === other) { await env.DB.prepare("UPDATE tpart SET state = 'yes', at = ? WHERE team = ? AND a = ? AND b = ?").bind(now, id, other, me.mid).run(); return json({ state: "yes" }, 200, ch); }
+      if (!ab) await env.DB.prepare("INSERT INTO tpart (team, a, b, state, at) VALUES (?, ?, ?, 'req', ?)").bind(id, me.mid, other, now).run();
+      return json({ state: "out" }, 200, ch);
+    }
+    if (parts.length === 5 && parts[4] === "accept" && M === "POST") {
+      if (!ab || ab.a !== other || ab.state !== "req") return json({ error: "no request" }, 404, ch);
+      await env.DB.prepare("UPDATE tpart SET state = 'yes', at = ? WHERE team = ? AND a = ? AND b = ?").bind(now, id, other, me.mid).run();
+      return json({ state: "yes" }, 200, ch);
+    }
+    if (parts.length === 4 && M === "DELETE") { // decline, cancel or end: either side, any time
+      await env.DB.prepare("DELETE FROM tpart WHERE team = ? AND ((a = ? AND b = ?) OR (a = ? AND b = ?))").bind(id, me.mid, other, other, me.mid).run();
+      return json({ state: "" }, 200, ch);
+    }
+    return json({ error: "not found" }, 404, ch);
   }
   if (parts.length === 3 && parts[2] === "shared" && M === "GET") { // any member: the copies teammates chose to share with me
     await shareInit(env);
     const ms = (await env.DB.prepare("SELECT m.sub AS sub, m.mid AS mid, m.role AS role, s.doc AS doc, s.updated AS updated, s.readers AS readers FROM members m JOIN snaps s ON s.team = m.team AND s.sub = m.sub WHERE m.team = ?").bind(id).all()).results || [];
+    const all = (await env.DB.prepare("SELECT mid, role, upline, level FROM members WHERE team = ?").bind(id).all()).results || [], T = treeOf(all), P = await partnersOf(env, id, me.mid);
     const out = [];
     for (const m of ms) {
-      if (m.sub === s.sub || !readersOf(m.readers).includes(me.mid)) continue;
+      if (m.sub === s.sub) continue;
+      const why = isAbove(T, me.mid, m.mid) ? "upline" : P[m.mid] === "yes" ? "partner" : readersOf(m.readers).includes(me.mid) ? "shared" : "";
+      if (!why) continue;
       let doc = null; try { doc = (await openT(env, id, m.sub, m.doc)).doc; } catch { doc = null; }
-      out.push({ mid: m.mid, role: m.role, updated: m.updated || null, doc });
+      out.push({ mid: m.mid, role: m.role, updated: m.updated || null, doc, why });
     }
     return json({ members: out }, 200, ch);
   }
@@ -233,8 +330,10 @@ async function teams(env, req, s, path, ch) {
     const t = await env.DB.prepare("SELECT name FROM teams WHERE id = ?").bind(id).first();
     const ms = (await env.DB.prepare("SELECT m.sub AS sub, m.mid AS mid, m.role AS role, m.joined AS joined, s.doc AS doc, s.updated AS updated FROM members m LEFT JOIN snaps s ON s.team = m.team AND s.sub = m.sub WHERE m.team = ?").bind(id).all()).results || [];
     const out = [];
+    await shareInit(env);
+    const all = (await env.DB.prepare("SELECT mid, role, upline, level FROM members WHERE team = ?").bind(id).all()).results || [], T = treeOf(all);
     for (const m of ms) {
-      if (m.sub === s.sub) continue;
+      if (m.sub === s.sub || !isAbove(T, me.mid, m.mid)) continue; // a released MD's branch is theirs, not the lead's
       let doc = null;
       if (m.doc) { try { const o = await openT(env, id, m.sub, m.doc); doc = o.doc; if (o.stale) await env.DB.prepare("UPDATE snaps SET doc = ? WHERE team = ? AND sub = ? AND updated = ?").bind(await sealT(env, id, m.sub, doc), id, m.sub, m.updated).run(); } catch { doc = null; } }
       out.push({ mid: m.mid, role: m.role, joined: m.joined, updated: m.updated || null, doc });
@@ -329,6 +428,11 @@ async function teams(env, req, s, path, ch) {
     if (!(self || lead) || (self && lead)) return json({ error: "forbidden" }, 403, ch); // a lead deletes the team instead
     await env.DB.prepare("DELETE FROM snaps WHERE team = ? AND sub = ?").bind(id, target.sub).run();
     await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE team = ? AND sub = ?").bind(id, target.sub).run();
+    await shareInit(env);
+    const tm = await env.DB.prepare("SELECT mid, upline FROM members WHERE team = ? AND sub = ?").bind(id, target.sub).first();
+    if (tm) { await env.DB.prepare("UPDATE members SET upline = ? WHERE team = ? AND upline = ?").bind(tm.upline || null, id, tm.mid).run(); // their recruits move up to their upline
+      await env.DB.prepare("DELETE FROM tpart WHERE team = ? AND (a = ? OR b = ?)").bind(id, tm.mid, tm.mid).run();
+      await env.DB.prepare("DELETE FROM rcodes WHERE team = ? AND mid = ?").bind(id, tm.mid).run(); }
     await env.DB.prepare("DELETE FROM members WHERE team = ? AND sub = ?").bind(id, target.sub).run();
     return json({ ok: true }, 200, ch);
   }
