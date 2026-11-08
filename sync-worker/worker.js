@@ -920,6 +920,117 @@ function pushQueue(q, now) {
   return out.sort((a, b) => a.at - b.at);
 }
 const nextAt = q => q.length ? q[0].at : null;
+// ---- live calendar feed: Apple, Google and Outlook subscribe to one private link and stay current ----
+// The owner's app sends the events it wants shown (work blocks; personal only if they choose), already turned into exact
+// times. They're sealed per account. The link holds a long random secret; the database keeps only its hash, so a copy of the
+// database can't be turned into working links. Reset makes a new secret and the old link stops at once.
+const FEED_MAX = 1500, FEED_BYTES = 450_000, FEED_ID = /^[A-Za-z0-9_|.-]{1,80}$/;
+let feedReady = false;
+async function feedInit(env) { if (feedReady) return; await env.DB.prepare("CREATE TABLE IF NOT EXISTS feeds (id TEXT PRIMARY KEY, sub TEXT NOT NULL UNIQUE, box TEXT NOT NULL, updated INTEGER NOT NULL)").run(); feedReady = true; }
+function feedClean(list, now) {
+  if (!Array.isArray(list) || list.length > FEED_MAX) return null;
+  const out = [], lo = now - 62 * 864e5, hi = now + 400 * 864e5;
+  for (const x of list) {
+    if (!x || typeof x !== "object" || !FEED_ID.test(String(x.id || ""))) return null;
+    const s = Math.round(+x.s), e = Math.round(+x.e);
+    if (!(s >= lo && s <= hi && e > s && e - s <= 864e5)) return null;
+    const t = String(x.t || "").trim().slice(0, 90) || "Busy";
+    out.push({ id: String(x.id), s, e, t, ...(x.c ? { c: String(x.c).slice(0, 30) } : {}), ...(cleanLink(x.l) ? { l: cleanLink(x.l) } : {}) });
+  }
+  return out;
+}
+const icsText = t => String(t).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+const icsTime = ms => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+function icsFold(line) { const b = enc.encode(line); if (b.length <= 75) return line; const out = []; let cur = "", n = 0;
+  for (const ch of line) { const k = enc.encode(ch).length; if (n + k > (out.length ? 74 : 75)) { out.push(cur); cur = ""; n = 0; } cur += ch; n += k; } out.push(cur); return out.join("\r\n "); }
+function feedIcs(doc, now) {
+  const L = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Hourline//Feed//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "X-WR-CALNAME:" + icsText(doc.name || "Hourline"), "REFRESH-INTERVAL;VALUE=DURATION:PT30M", "X-PUBLISHED-TTL:PT30M"], stamp = icsTime(now);
+  for (const x of doc.ev || []) {
+    const desc = [x.c ? x.c : "", x.l ? `Join: ${x.l}` : "", "Open in Hourline: https://hourline.io/app/"].filter(Boolean).join("\n");
+    L.push("BEGIN:VEVENT", "UID:" + x.id.replace(/\|/g, "-") + "@hourline.io", "DTSTAMP:" + stamp, "DTSTART:" + icsTime(x.s), "DTEND:" + icsTime(x.e), "SUMMARY:" + icsText(x.t),
+      ...(x.l ? ["LOCATION:" + icsText(x.l), "URL:" + x.l] : []), "DESCRIPTION:" + icsText(desc), "TRANSP:OPAQUE", "END:VEVENT");
+  }
+  L.push("END:VCALENDAR");
+  return L.map(icsFold).join("\r\n") + "\r\n";
+}
+async function feedRoutes(env, req, s, path, ch) {
+  await feedInit(env);
+  const now = Date.now(), row = await env.DB.prepare("SELECT id, box, updated FROM feeds WHERE sub = ?").bind(s.sub).first();
+  const urlOf = tok => "https://api.hourline.io/cal/" + tok + ".ics";
+  if (path === "/feed" && req.method === "GET") {
+    if (!row) return json({ on: false }, 200, ch);
+    const d = (await open(env, s.sub, row.box)).doc; return json({ on: true, url: urlOf(d.tok), updated: row.updated, n: (d.ev || []).length }, 200, ch);
+  }
+  if (path === "/feed" && req.method === "PUT") {
+    if (limited(req, 30, "feed")) return json({ error: "slow down" }, 429, ch);
+    const raw = await req.text(); if (raw.length > FEED_BYTES) return json({ error: "too big" }, 413, ch);
+    let b; try { b = JSON.parse(raw); } catch { return json({ error: "bad json" }, 400, ch); }
+    const ev = feedClean(b && b.ev, now); if (!ev) return json({ error: "bad events" }, 400, ch);
+    const name = String(b.name || "").trim().slice(0, 40);
+    let tok;
+    if (row) { try { tok = (await open(env, s.sub, row.box)).doc.tok; } catch (e) { tok = null; } }
+    if (!tok) tok = rnd(24);
+    const id = "f_" + await sha256("feed:" + tok), box = await seal(env, s.sub, { tok, name: name ? "Hourline · " + name : "Hourline", ev });
+    if (row && row.id !== id) await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run();
+    await env.DB.prepare("INSERT INTO feeds (id, sub, box, updated) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(id, s.sub, box, now).run();
+    return json({ ok: true, url: urlOf(tok), n: ev.length }, 200, ch);
+  }
+  if (path === "/feed/reset" && req.method === "POST") {
+    if (!row) return json({ error: "not on" }, 404, ch);
+    const d = (await open(env, s.sub, row.box)).doc, tok = rnd(24), id = "f_" + await sha256("feed:" + tok);
+    await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run();
+    await env.DB.prepare("INSERT INTO feeds (id, sub, box, updated) VALUES (?, ?, ?, ?)").bind(id, s.sub, await seal(env, s.sub, { ...d, tok }), now).run();
+    return json({ ok: true, url: urlOf(tok) }, 200, ch);
+  }
+  if (path === "/feed" && req.method === "DELETE") { await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
+  return json({ error: "not found" }, 404, ch);
+}
+// ---- reading someone's other calendar by its link (Google secret address, iCloud public link, Outlook ICS link) ----
+// The app can't read those addresses itself (the calendar sites don't allow it from a web page), so the server fetches
+// the file and hands back the text. Nothing is stored. Only public https addresses on standard port 443: no IP
+// addresses, no local or internal names, at most 3 redirects (each checked), 10 seconds and 5 MB.
+const ICS_MAX = 5_000_000;
+function icsUrlOk(raw) {
+  let u; try { u = new URL(String(raw || "").trim().replace(/^webcal:/i, "https:")); } catch { return null; }
+  if (u.protocol !== "https:" || u.username || u.password || (u.port && u.port !== "443")) return null;
+  const h = u.hostname.toLowerCase();
+  if (!h.includes(".") || /^[\d.]+$/.test(h) || h.includes(":") || h.startsWith("[") || /(^|\.)(localhost|local|internal|intranet|lan|home|corp|arpa)$/.test(h) || h.endsWith(".hourline.io") || h === "hourline.io") return null;
+  if (u.href.length > 1000) return null;
+  return u;
+}
+async function icsFetchRoute(env, req, s, ch) {
+  if (limited(req, 20, "icsfetch")) return json({ error: "slow down" }, 429, ch);
+  const b = await req.json().catch(() => null); let u = icsUrlOk(b && b.url); if (!u) return json({ error: "bad link" }, 400, ch);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    let r, hops = 0;
+    for (;;) {
+      r = await fetch(u.href, { method: "GET", redirect: "manual", signal: ctl.signal, headers: { accept: "text/calendar, text/plain;q=0.8, */*;q=0.1", "user-agent": "Hourline calendar import (+https://hourline.io)" } });
+      if (r.status >= 300 && r.status < 400 && r.headers.get("location")) { if (++hops > 3) return json({ error: "too many redirects" }, 400, ch); u = icsUrlOk(new URL(r.headers.get("location"), u).href); if (!u) return json({ error: "bad link" }, 400, ch); continue; }
+      break;
+    }
+    if (!r.ok) return json({ error: "calendar said " + r.status }, 400, ch);
+    if (+(r.headers.get("content-length") || 0) > ICS_MAX) return json({ error: "too big" }, 413, ch);
+    const rd = r.body.getReader(); let got = 0; const parts = [];
+    for (;;) { const { done, value } = await rd.read(); if (done) break; got += value.length; if (got > ICS_MAX) { try { await rd.cancel(); } catch { } return json({ error: "too big" }, 413, ch); } parts.push(value); }
+    const all = new Uint8Array(got); let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(all);
+    if (!/^\s*BEGIN:VCALENDAR/i.test(text.slice(0, 500))) return json({ error: "not a calendar" }, 400, ch);
+    return json({ text }, 200, { ...ch, "cache-control": "no-store" });
+  } catch (e) { return json({ error: "couldn't reach that calendar" }, 502, ch); }
+  finally { clearTimeout(timer); }
+}
+async function feedPublic(env, req, tok) {
+  const H = { ...SEC, "content-type": "text/calendar; charset=utf-8", "cache-control": "private, max-age=300", "x-robots-tag": "noindex, nofollow", "content-disposition": 'inline; filename="hourline.ics"' };
+  if (limited(req, 60, "cal")) return new Response("slow down", { status: 429, headers: { ...SEC, "content-type": "text/plain" } });
+  if (!/^[A-Za-z0-9_-]{32}$/.test(tok)) return new Response("not found", { status: 404, headers: { ...SEC, "content-type": "text/plain" } });
+  await feedInit(env);
+  const row = await env.DB.prepare("SELECT sub, box FROM feeds WHERE id = ?").bind("f_" + await sha256("feed:" + tok)).first();
+  if (!row) return new Response("not found", { status: 404, headers: { ...SEC, "content-type": "text/plain" } });
+  let d; try { d = (await open(env, row.sub, row.box)).doc; } catch (e) { return new Response("not found", { status: 404, headers: { ...SEC, "content-type": "text/plain" } }); }
+  if (d.tok !== tok) return new Response("not found", { status: 404, headers: { ...SEC, "content-type": "text/plain" } });
+  return new Response(feedIcs(d, Date.now()), { status: 200, headers: H });
+}
 // Leader nudges: at most NUDGE_DAILY per member per team per day, NUDGE_BATCH members per request (keeps each request
 // well under Cloudflare's outgoing-request limit; the app sends larger teams in batches), newest NUDGE_DEVICES phones each.
 const NUDGE_DAILY = 2, NUDGE_BATCH = 15, NUDGE_DEVICES = 3;
@@ -1257,6 +1368,7 @@ export default {
           await proofInit(env); await env.DB.prepare("DELETE FROM proofs WHERE sub = ?").bind(s.sub).run();
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
+          await feedInit(env); await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
           await evInit(env); await env.DB.prepare("DELETE FROM events_use WHERE sub = ?").bind(s.sub).run();
           await nudgeInit(env); await env.DB.prepare("DELETE FROM nudge_use WHERE sub = ?").bind(s.sub).run();
@@ -1279,6 +1391,9 @@ export default {
       if (path === "/events" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await eventsRoute(env, req, s, ch); }
       if (path === "/feedback" || path === "/admin/feedback" || path.startsWith("/admin/feedback/")) return await feedbackRoutes(env, req, s, path, ch);
       if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
+      if (req.method === "GET" && path.startsWith("/cal/") && path.endsWith(".ics")) return await feedPublic(env, req, path.slice(5, -4));
+      if (path === "/ics/fetch" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await icsFetchRoute(env, req, s, ch); }
+      if (path === "/feed" || path === "/feed/reset") { if (!s) return json({ error: "signed out" }, 401, ch); return await feedRoutes(env, req, s, path, ch); }
       if (path === "/push" || path.startsWith("/push/")) {
         if (!s) return json({ error: "signed out" }, 401, ch);
         return await pushRoutes(env, req, s, path, ch);
