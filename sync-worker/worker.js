@@ -1035,7 +1035,7 @@ const gcalCb = env => (env.GCAL_REDIRECT || "https://api.hourline.io/gcal/callba
 async function gcalAccess(env, sub) {
   const row = await env.DB.prepare("SELECT box FROM gcal WHERE sub = ?").bind(sub).first(); if (!row) return null;
   const d = (await open(env, sub, row.box)).doc;
-  const r = await fetch(env.GCAL_TOKEN_URL || GCAL_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, refresh_token: d.rt, grant_type: "refresh_token" }) });
+  const r = await fetch(env.GCAL_TOKEN_URL || GCAL_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, client_secret: String(env.GOOGLE_CLIENT_SECRET || "").trim(), refresh_token: d.rt, grant_type: "refresh_token" }) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.access_token) { if (j.error === "invalid_grant") await env.DB.prepare("DELETE FROM gcal WHERE sub = ?").bind(sub).run(); return null; }
   return j.access_token;
@@ -1114,9 +1114,12 @@ async function gcalCallback(env, req, url) {
   if (url.searchParams.get("error") || !code) return back(false, "denied");
   const granted = (url.searchParams.get("scope") || "").split(" ");
   const { verifier } = (await open(env, row.sub, row.box)).doc;
-  const r = await fetch(env.GCAL_TOKEN_URL || GCAL_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, redirect_uri: gcalCb(env), grant_type: "authorization_code", code_verifier: verifier }) });
+  const r = await fetch(env.GCAL_TOKEN_URL || GCAL_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: env.GOOGLE_CLIENT_ID, client_secret: String(env.GOOGLE_CLIENT_SECRET || "").trim(), redirect_uri: gcalCb(env), grant_type: "authorization_code", code_verifier: verifier }) });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.refresh_token) return back(false, "failed");
+  if (!r.ok || !j.refresh_token) { // say which part Google refused (Google's error code only; never the secret or the code)
+    const e = String(j.error || ""), d = String(j.error_description || "").slice(0, 120);
+    console.log(JSON.stringify({ gcal: "token-refused", status: r.status, error: e, desc: d }));
+    return back(false, e === "invalid_client" || e === "unauthorized_client" ? "client" : e === "invalid_grant" ? (/redirect/i.test(d) ? "redirect" : "grant") : e === "redirect_uri_mismatch" ? "redirect" : r.ok ? "norefresh" : "failed"); }
   const sc = String(j.scope || granted.join(" "));
   if (!sc.includes("calendar.events.readonly")) { try { await fetch((env.GCAL_REVOKE_URL || "https://oauth2.googleapis.com/revoke") + "?token=" + encodeURIComponent(j.refresh_token), { method: "POST" }); } catch (e) { } return back(false, "scope"); }
   await env.DB.prepare("INSERT INTO gcal (sub, box, updated) VALUES (?, ?, ?) ON CONFLICT(sub) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(row.sub, await seal(env, row.sub, { rt: j.refresh_token, scope: sc.slice(0, 400) }), Date.now()).run();
