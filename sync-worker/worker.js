@@ -14,6 +14,7 @@
 //   GOOGLE_CLIENT_ID (text), APP_ORIGIN (text), SESSION_SECRET (secret), DATA_KEY (secret)
 //   Optional: DATA_KEY_OLD (secret, only while rotating DATA_KEY), LOCKDOWN (text "1" = emergency stop),
 //   ANTHROPIC_API_KEY (secret, turns on Ella smart conversation and the event finder), ELLA_DAILY (text, messages per account per day, default 40)
+//   GCAL_OPEN (text "1" once Google approves the calendar permissions; until then only ADMIN_EMAILS and GCAL_TESTERS see Connect Google Calendar)
 //   ADMIN_EMAILS (text, comma-separated Google emails that can read problem reports; defaults to the owner)
 //   EVENTS_DAILY (text, event searches per account per day, default 5), WEB_SEARCH_TOOL (text, default web_search_20250305)
 //   GEOCODE_URL (text, reverse-geocoding endpoint, default OpenStreetMap Nominatim), GEOCODE_OFF (text "1" = no addresses on check-in proof)
@@ -1047,7 +1048,10 @@ async function gcalRoutes(env, req, s, path, ch) {
   await gcalInit(env);
   if (!env.GOOGLE_CLIENT_SECRET) return json({ error: "not set up" }, 503, ch);
   const now = Date.now();
+  // Until Google approves the calendar permissions, only the owner (ADMIN_EMAILS) and GCAL_TESTERS can start a connection; GCAL_OPEN = "1" opens it to everyone.
+  const allowed = env.GCAL_OPEN === "1" || isAdmin(env, s) || String(env.GCAL_TESTERS || "").toLowerCase().split(",").map(x => x.trim()).filter(Boolean).includes(String(s.email || "").toLowerCase());
   if (path === "/gcal/begin" && req.method === "POST") { // the app gets a one-time Google consent link
+    if (!allowed) return json({ error: "not available yet" }, 403, ch);
     if (limited(req, 10, "gcal")) return json({ error: "slow down" }, 429, ch);
     const state = rnd(24), verifier = rnd(48), challenge = b64u(await crypto.subtle.digest("SHA-256", enc.encode(verifier)));
     await env.DB.prepare("DELETE FROM gcal_state WHERE created < ?").bind(now - 15 * 60000).run();
@@ -1055,7 +1059,7 @@ async function gcalRoutes(env, req, s, path, ch) {
     const q = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: gcalCb(env), response_type: "code", scope: GCAL_SCOPES, access_type: "offline", prompt: "consent", include_granted_scopes: "false", state, code_challenge: challenge, code_challenge_method: "S256", login_hint: String(s.email || "") });
     return json({ url: (env.GOOGLE_AUTH_URL || GOOGLE_AUTH) + "?" + q }, 200, ch);
   }
-  if (path === "/gcal" && req.method === "GET") { const row = await env.DB.prepare("SELECT updated FROM gcal WHERE sub = ?").bind(s.sub).first(); return json({ on: !!row, since: row ? row.updated : 0 }, 200, ch); }
+  if (path === "/gcal" && req.method === "GET") { const row = await env.DB.prepare("SELECT updated FROM gcal WHERE sub = ?").bind(s.sub).first(); return json({ on: !!row, since: row ? row.updated : 0, allowed }, 200, ch); }
   if (path === "/gcal/off" && req.method === "POST") {
     const row = await env.DB.prepare("SELECT box FROM gcal WHERE sub = ?").bind(s.sub).first();
     if (row) { try { const d = (await open(env, s.sub, row.box)).doc; await fetch((env.GCAL_REVOKE_URL || "https://oauth2.googleapis.com/revoke") + "?token=" + encodeURIComponent(d.rt), { method: "POST" }); } catch (e) { } }
