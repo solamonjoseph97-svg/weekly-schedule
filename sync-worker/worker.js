@@ -985,6 +985,41 @@ async function feedRoutes(env, req, s, path, ch) {
   if (path === "/feed" && req.method === "DELETE") { await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
   return json({ error: "not found" }, 404, ch);
 }
+// ---- reading someone's other calendar by its link (Google secret address, iCloud public link, Outlook ICS link) ----
+// The app can't read those addresses itself (the calendar sites don't allow it from a web page), so the server fetches
+// the file and hands back the text. Nothing is stored. Only public https addresses on standard port 443: no IP
+// addresses, no local or internal names, at most 3 redirects (each checked), 10 seconds and 5 MB.
+const ICS_MAX = 5_000_000;
+function icsUrlOk(raw) {
+  let u; try { u = new URL(String(raw || "").trim().replace(/^webcal:/i, "https:")); } catch { return null; }
+  if (u.protocol !== "https:" || u.username || u.password || (u.port && u.port !== "443")) return null;
+  const h = u.hostname.toLowerCase();
+  if (!h.includes(".") || /^[\d.]+$/.test(h) || h.includes(":") || h.startsWith("[") || /(^|\.)(localhost|local|internal|intranet|lan|home|corp|arpa)$/.test(h) || h.endsWith(".hourline.io") || h === "hourline.io") return null;
+  if (u.href.length > 1000) return null;
+  return u;
+}
+async function icsFetchRoute(env, req, s, ch) {
+  if (limited(req, 20, "icsfetch")) return json({ error: "slow down" }, 429, ch);
+  const b = await req.json().catch(() => null); let u = icsUrlOk(b && b.url); if (!u) return json({ error: "bad link" }, 400, ch);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    let r, hops = 0;
+    for (;;) {
+      r = await fetch(u.href, { method: "GET", redirect: "manual", signal: ctl.signal, headers: { accept: "text/calendar, text/plain;q=0.8, */*;q=0.1", "user-agent": "Hourline calendar import (+https://hourline.io)" } });
+      if (r.status >= 300 && r.status < 400 && r.headers.get("location")) { if (++hops > 3) return json({ error: "too many redirects" }, 400, ch); u = icsUrlOk(new URL(r.headers.get("location"), u).href); if (!u) return json({ error: "bad link" }, 400, ch); continue; }
+      break;
+    }
+    if (!r.ok) return json({ error: "calendar said " + r.status }, 400, ch);
+    if (+(r.headers.get("content-length") || 0) > ICS_MAX) return json({ error: "too big" }, 413, ch);
+    const rd = r.body.getReader(); let got = 0; const parts = [];
+    for (;;) { const { done, value } = await rd.read(); if (done) break; got += value.length; if (got > ICS_MAX) { try { await rd.cancel(); } catch { } return json({ error: "too big" }, 413, ch); } parts.push(value); }
+    const all = new Uint8Array(got); let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(all);
+    if (!/^\s*BEGIN:VCALENDAR/i.test(text.slice(0, 500))) return json({ error: "not a calendar" }, 400, ch);
+    return json({ text }, 200, { ...ch, "cache-control": "no-store" });
+  } catch (e) { return json({ error: "couldn't reach that calendar" }, 502, ch); }
+  finally { clearTimeout(timer); }
+}
 async function feedPublic(env, req, tok) {
   const H = { ...SEC, "content-type": "text/calendar; charset=utf-8", "cache-control": "private, max-age=300", "x-robots-tag": "noindex, nofollow", "content-disposition": 'inline; filename="hourline.ics"' };
   if (limited(req, 60, "cal")) return new Response("slow down", { status: 429, headers: { ...SEC, "content-type": "text/plain" } });
@@ -1357,6 +1392,7 @@ export default {
       if (path === "/feedback" || path === "/admin/feedback" || path.startsWith("/admin/feedback/")) return await feedbackRoutes(env, req, s, path, ch);
       if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
       if (req.method === "GET" && path.startsWith("/cal/") && path.endsWith(".ics")) return await feedPublic(env, req, path.slice(5, -4));
+      if (path === "/ics/fetch" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await icsFetchRoute(env, req, s, ch); }
       if (path === "/feed" || path === "/feed/reset") { if (!s) return json({ error: "signed out" }, 401, ch); return await feedRoutes(env, req, s, path, ch); }
       if (path === "/push" || path.startsWith("/push/")) {
         if (!s) return json({ error: "signed out" }, 401, ch);
