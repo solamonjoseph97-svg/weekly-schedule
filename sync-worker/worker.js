@@ -1020,6 +1020,104 @@ async function icsFetchRoute(env, req, s, ch) {
   } catch (e) { return json({ error: "couldn't reach that calendar" }, 502, ch); }
   finally { clearTimeout(timer); }
 }
+// ---- Google Calendar, read-only (plan Phase 3b) ----
+// Only when the person taps Connect: Google asks them to allow reading their events and calendar list. Nothing can be
+// created, changed or deleted. The long-lived permission (refresh token) is sealed with the person's key; events are read
+// when the app asks and handed straight back, never stored here. Disconnect deletes the permission and asks Google to revoke it.
+const GCAL_SCOPES = "https://www.googleapis.com/auth/calendar.events.readonly https://www.googleapis.com/auth/calendar.calendarlist.readonly";
+const GCAL_TOKEN = "https://oauth2.googleapis.com/token", GCAL_API = "https://www.googleapis.com/calendar/v3";
+let gcalReady = false;
+async function gcalInit(env) { if (gcalReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS gcal (sub TEXT PRIMARY KEY, box TEXT NOT NULL, updated INTEGER NOT NULL)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS gcal_state (id TEXT PRIMARY KEY, sub TEXT NOT NULL, box TEXT NOT NULL, created INTEGER NOT NULL)").run(); gcalReady = true; }
+const gcalCb = env => (env.GCAL_REDIRECT || "https://api.hourline.io/gcal/callback");
+async function gcalAccess(env, sub) {
+  const row = await env.DB.prepare("SELECT box FROM gcal WHERE sub = ?").bind(sub).first(); if (!row) return null;
+  const d = (await open(env, sub, row.box)).doc;
+  const r = await fetch(env.GCAL_TOKEN_URL || GCAL_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, refresh_token: d.rt, grant_type: "refresh_token" }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) { if (j.error === "invalid_grant") await env.DB.prepare("DELETE FROM gcal WHERE sub = ?").bind(sub).run(); return null; }
+  return j.access_token;
+}
+function gcalLink(ev) {
+  const v = ((ev.conferenceData && ev.conferenceData.entryPoints) || []).find(x => x.entryPointType === "video");
+  return cleanLink(ev.hangoutLink || (v && v.uri) || "") || "";
+}
+async function gcalRoutes(env, req, s, path, ch) {
+  await gcalInit(env);
+  if (!env.GOOGLE_CLIENT_SECRET) return json({ error: "not set up" }, 503, ch);
+  const now = Date.now();
+  if (path === "/gcal/begin" && req.method === "POST") { // the app gets a one-time Google consent link
+    if (limited(req, 10, "gcal")) return json({ error: "slow down" }, 429, ch);
+    const state = rnd(24), verifier = rnd(48), challenge = b64u(await crypto.subtle.digest("SHA-256", enc.encode(verifier)));
+    await env.DB.prepare("DELETE FROM gcal_state WHERE created < ?").bind(now - 15 * 60000).run();
+    await env.DB.prepare("INSERT INTO gcal_state (id, sub, box, created) VALUES (?, ?, ?, ?)").bind("g_" + await sha256("gstate:" + state), s.sub, await seal(env, s.sub, { verifier }), now).run();
+    const q = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: gcalCb(env), response_type: "code", scope: GCAL_SCOPES, access_type: "offline", prompt: "consent", include_granted_scopes: "false", state, code_challenge: challenge, code_challenge_method: "S256", login_hint: String(s.email || "") });
+    return json({ url: (env.GOOGLE_AUTH_URL || GOOGLE_AUTH) + "?" + q }, 200, ch);
+  }
+  if (path === "/gcal" && req.method === "GET") { const row = await env.DB.prepare("SELECT updated FROM gcal WHERE sub = ?").bind(s.sub).first(); return json({ on: !!row, since: row ? row.updated : 0 }, 200, ch); }
+  if (path === "/gcal/off" && req.method === "POST") {
+    const row = await env.DB.prepare("SELECT box FROM gcal WHERE sub = ?").bind(s.sub).first();
+    if (row) { try { const d = (await open(env, s.sub, row.box)).doc; await fetch((env.GCAL_REVOKE_URL || "https://oauth2.googleapis.com/revoke") + "?token=" + encodeURIComponent(d.rt), { method: "POST" }); } catch (e) { } }
+    await env.DB.prepare("DELETE FROM gcal WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch);
+  }
+  if (path === "/gcal/calendars" && req.method === "POST") {
+    if (limited(req, 30, "gcal")) return json({ error: "slow down" }, 429, ch);
+    const at = await gcalAccess(env, s.sub); if (!at) return json({ error: "not connected" }, 409, ch);
+    const r = await fetch(GCAL_API + "/users/me/calendarList?minAccessRole=freeBusyReader&maxResults=50&fields=items(id,summary,summaryOverride,primary,backgroundColor,accessRole,selected)", { headers: { authorization: "Bearer " + at } });
+    if (!r.ok) return json({ error: "google said " + r.status }, 502, ch);
+    const j = await r.json(); return json({ calendars: (j.items || []).slice(0, 50).map(c => ({ id: String(c.id).slice(0, 200), name: String(c.summaryOverride || c.summary || "Calendar").slice(0, 60), primary: !!c.primary, color: /^#[0-9a-f]{6}$/i.test(c.backgroundColor || "") ? c.backgroundColor : "", on: c.selected !== false })) }, 200, ch);
+  }
+  if (path === "/gcal/events" && req.method === "POST") {
+    if (limited(req, 30, "gcal")) return json({ error: "slow down" }, 429, ch);
+    const b = await req.json().catch(() => null); const cals = Array.isArray(b && b.cals) ? b.cals.map(String).filter(x => x.length <= 200).slice(0, 10) : [];
+    const from = Math.max(now - 14 * 864e5, +b.from || now), to = Math.min(now + 120 * 864e5, +b.to || now + 84 * 864e5);
+    if (!cals.length || !(to > from)) return json({ error: "bad request" }, 400, ch);
+    const at = await gcalAccess(env, s.sub); if (!at) return json({ error: "not connected" }, 409, ch);
+    const out = [];
+    for (const cal of cals) {
+      let page = "", n = 0;
+      do {
+        const q = new URLSearchParams({ singleEvents: "true", orderBy: "startTime", timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString(), maxResults: "2500", fields: "nextPageToken,items(id,iCalUID,summary,status,transparency,start,end,location,hangoutLink,conferenceData/entryPoints,recurringEventId,originalStartTime,attendees(self,responseStatus),eventType)", ...(page ? { pageToken: page } : {}) });
+        const r = await fetch(GCAL_API + "/calendars/" + encodeURIComponent(cal) + "/events?" + q, { headers: { authorization: "Bearer " + at } });
+        if (!r.ok) { if (r.status === 404 || r.status === 403) break; return json({ error: "google said " + r.status }, 502, ch); }
+        const j = await r.json(); page = j.nextPageToken || "";
+        for (const ev of j.items || []) {
+          if (ev.status === "cancelled") continue;
+          const allDay = !!(ev.start && ev.start.date), s0 = allDay ? Date.parse(ev.start.date + "T00:00:00") : Date.parse(ev.start && ev.start.dateTime), e0 = allDay ? Date.parse(ev.end.date + "T00:00:00") : Date.parse(ev.end && ev.end.dateTime);
+          if (!(s0 > 0 && e0 >= s0)) continue;
+          const me = (ev.attendees || []).find(a => a.self), declined = me && me.responseStatus === "declined";
+          const uid = String(ev.iCalUID || ev.id).slice(0, 200), orig = ev.recurringEventId && ev.originalStartTime ? (ev.originalStartTime.dateTime ? Date.parse(ev.originalStartTime.dateTime) : ev.originalStartTime.date) : null;
+          out.push({ key: (orig != null ? uid + "|" + orig : uid).slice(0, 240), uid, title: String(ev.summary || "Busy").slice(0, 90), s: s0, e: e0, allDay, ...(allDay ? { day: ev.start.date, dayEnd: ev.end.date } : {}),
+            free: ev.transparency === "transparent" || !!declined || ev.eventType === "workingLocation", series: !!ev.recurringEventId, loc: String(ev.location || "").slice(0, 300), url: gcalLink(ev), desc: "", cal });
+          if (out.length >= 3000) break;
+        }
+      } while (page && ++n < 4 && out.length < 3000);
+    }
+    return json({ events: out }, 200, { ...ch, "cache-control": "no-store" });
+  }
+  return json({ error: "not found" }, 404, ch);
+}
+async function gcalCallback(env, req, url) {
+  const back = (ok, why) => new Response(null, { status: 302, headers: { ...SEC, location: (env.APP_ORIGIN || "https://hourline.io") + "/app/#" + (ok ? "gcal-ok" : "gcal-" + why) } });
+  if (limited(req, 20, "gcalcb")) return back(false, "slow");
+  await gcalInit(env);
+  const state = url.searchParams.get("state") || "", code = url.searchParams.get("code") || "";
+  if (!/^[A-Za-z0-9_-]{32}$/.test(state)) return back(false, "bad");
+  const id = "g_" + await sha256("gstate:" + state), row = await env.DB.prepare("SELECT sub, box, created FROM gcal_state WHERE id = ?").bind(id).first();
+  await env.DB.prepare("DELETE FROM gcal_state WHERE id = ?").bind(id).run(); // one use only
+  if (!row || Date.now() - row.created > 15 * 60000) return back(false, "expired");
+  if (url.searchParams.get("error") || !code) return back(false, "denied");
+  const granted = (url.searchParams.get("scope") || "").split(" ");
+  const { verifier } = (await open(env, row.sub, row.box)).doc;
+  const r = await fetch(env.GCAL_TOKEN_URL || GCAL_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, redirect_uri: gcalCb(env), grant_type: "authorization_code", code_verifier: verifier }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.refresh_token) return back(false, "failed");
+  const sc = String(j.scope || granted.join(" "));
+  if (!sc.includes("calendar.events.readonly")) { try { await fetch((env.GCAL_REVOKE_URL || "https://oauth2.googleapis.com/revoke") + "?token=" + encodeURIComponent(j.refresh_token), { method: "POST" }); } catch (e) { } return back(false, "scope"); }
+  await env.DB.prepare("INSERT INTO gcal (sub, box, updated) VALUES (?, ?, ?) ON CONFLICT(sub) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(row.sub, await seal(env, row.sub, { rt: j.refresh_token, scope: sc.slice(0, 400) }), Date.now()).run();
+  return back(true);
+}
 async function feedPublic(env, req, tok) {
   const H = { ...SEC, "content-type": "text/calendar; charset=utf-8", "cache-control": "private, max-age=300", "x-robots-tag": "noindex, nofollow", "content-disposition": 'inline; filename="hourline.ics"' };
   if (limited(req, 60, "cal")) return new Response("slow down", { status: 429, headers: { ...SEC, "content-type": "text/plain" } });
@@ -1369,6 +1467,8 @@ export default {
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await feedInit(env); await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run();
+          await gcalInit(env); { const g = await env.DB.prepare("SELECT box FROM gcal WHERE sub = ?").bind(s.sub).first(); if (g) { try { const d = (await open(env, s.sub, g.box)).doc; await fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(d.rt), { method: "POST" }); } catch (e) { } } }
+          await env.DB.prepare("DELETE FROM gcal WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM gcal_state WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
           await evInit(env); await env.DB.prepare("DELETE FROM events_use WHERE sub = ?").bind(s.sub).run();
           await nudgeInit(env); await env.DB.prepare("DELETE FROM nudge_use WHERE sub = ?").bind(s.sub).run();
@@ -1392,6 +1492,8 @@ export default {
       if (path === "/feedback" || path === "/admin/feedback" || path.startsWith("/admin/feedback/")) return await feedbackRoutes(env, req, s, path, ch);
       if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
       if (req.method === "GET" && path.startsWith("/cal/") && path.endsWith(".ics")) return await feedPublic(env, req, path.slice(5, -4));
+      if (path === "/gcal/callback" && req.method === "GET") return await gcalCallback(env, req, url);
+      if (path === "/gcal" || path.startsWith("/gcal/")) { if (!s) return json({ error: "signed out" }, 401, ch); return await gcalRoutes(env, req, s, path, ch); }
       if (path === "/ics/fetch" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await icsFetchRoute(env, req, s, ch); }
       if (path === "/feed" || path === "/feed/reset") { if (!s) return json({ error: "signed out" }, 401, ch); return await feedRoutes(env, req, s, path, ch); }
       if (path === "/push" || path.startsWith("/push/")) {
@@ -1399,7 +1501,7 @@ export default {
         return await pushRoutes(env, req, s, path, ch);
       }
       if (path === "/" || path === "/health") // setup check: says only whether each setting exists, never its value
-        return json({ ok: true, service: "schedule-io-sync", setup: { db: !!env.DB, google: !!env.GOOGLE_CLIENT_ID, origin: !!env.APP_ORIGIN, session: !!env.SESSION_SECRET, data: !!env.DATA_KEY, push: !!globalThis.crypto?.subtle, ai: !!env.ANTHROPIC_API_KEY } }, 200, ch);
+        return json({ ok: true, service: "schedule-io-sync", setup: { db: !!env.DB, google: !!env.GOOGLE_CLIENT_ID, origin: !!env.APP_ORIGIN, session: !!env.SESSION_SECRET, data: !!env.DATA_KEY, push: !!globalThis.crypto?.subtle, ai: !!env.ANTHROPIC_API_KEY, gcal: !!env.GOOGLE_CLIENT_SECRET } }, 200, ch);
       return json({ error: "not found" }, 404, ch);
     } catch (e) {
       if (e && e.status === 413) return json({ error: "too large" }, 413, ch);
