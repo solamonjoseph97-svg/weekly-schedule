@@ -202,7 +202,7 @@ async function tmetInit(env) { if (tmetReady) return; await env.DB.prepare("CREA
 // recruits: "Got coded ($199 paid)", approved by the nearest Marketing Director above the recruiter (or the team lead),
 // or by whoever runs a recruit competition the recruiter is in. Sealed; a phone already approved on this team is flagged.
 // competitions: top finishers / hit the goal / team goal, on one team number (or approved recruits, counted here, not by the phone).
-// booking time: your downline and accountability partners can ask for time on your calendar, inside the hours you set.
+// booking time: your uplines, your downline and your accountability partners can ask for time on your calendar, inside the hours you set.
 // avail: your hours plus busy times only (never titles), sealed. bookings: a request, counter-offers, accept / decline / cancel, sealed.
 let bkReady = false;
 async function bkInit(env) { if (bkReady) return;
@@ -478,7 +478,7 @@ async function teams(env, req, s, path, ch) {
     await shareInit(env); await bkInit(env);
     const all = (await env.DB.prepare("SELECT sub, mid, role, upline, level, nbox, pbox FROM members WHERE team = ?").bind(id).all()).results || [], T = treeOf(all), P = await partnersOf(env, id, me.mid);
     const nameOf = async mid => { const m = all.find(x => x.mid === mid); if (!m) return "Teammate"; let nm = ""; if (m.pbox) { try { nm = String((await openT(env, id, m.sub, m.pbox)).doc.name || ""); } catch (e) { } } if (!nm && m.nbox) { try { nm = String((await openT(env, id, m.sub, m.nbox)).doc.name || ""); } catch (e) { } } return nm.slice(0, 40) || "Teammate"; };
-    const mayBook = to => to !== me.mid && all.some(x => x.mid === to) && (isAbove(T, to, me.mid) || P[to] === "yes"); // your uplines, and your partners
+    const mayBook = to => to !== me.mid && all.some(x => x.mid === to) && (isAbove(T, to, me.mid) || isAbove(T, me.mid, to) || P[to] === "yes"); // your uplines, your downline, and your partners
     const today = new Date(now).toISOString().slice(0, 10);
     if (parts[2] === "avail") {
       if (parts.length === 3 && M === "PUT") { // my hours + busy times for the next few weeks
@@ -492,7 +492,7 @@ async function teams(env, req, s, path, ch) {
       if (parts.length === 3 && M === "GET") { // who I can book, and my own hours
         const rows = (await env.DB.prepare("SELECT mid, box FROM avail WHERE team = ?").bind(id).all()).results || [], out = []; let mine = null;
         for (const r of rows) { let d; try { d = (await openT(env, id, "avail|" + r.mid, r.box)).doc; } catch (e) { continue; }
-          if (r.mid === me.mid) mine = d.hours; else if (mayBook(r.mid) && d.hours.open) out.push({ mid: r.mid, name: await nameOf(r.mid), why: P[r.mid] === "yes" ? "partner" : "upline" }); }
+          if (r.mid === me.mid) mine = d.hours; else if (mayBook(r.mid) && d.hours.open) out.push({ mid: r.mid, name: await nameOf(r.mid), why: P[r.mid] === "yes" ? "partner" : isAbove(T, r.mid, me.mid) ? "upline" : "downline" }); }
         return json({ hours: mine, canBook: out }, 200, ch);
       }
       if (parts.length === 4 && M === "GET") { // their open hours and busy times (no titles); only for people I may book
@@ -510,7 +510,7 @@ async function teams(env, req, s, path, ch) {
     // bookings
     const clean = b => { const date = isoDay(b.date), start = Math.round(+b.start), dur = Math.round(+b.dur);
       if (!date || !(start >= 0 && start < 1440) || !(dur >= 5 && dur <= 240) || start + dur > 1440) return null;
-      const kind = BK_KINDS.includes(b.kind) ? b.kind : "other"; return { date, start, dur, kind, label: String(b.label || "").trim().slice(0, 40), note: String(b.note || "").trim().slice(0, 300), how: BK_HOW.includes(b.how) ? b.how : "phone" }; };
+      const kind = BK_KINDS.includes(b.kind) ? b.kind : "other"; return { date, start, dur, kind, label: String(b.label || "").trim().slice(0, 40), note: String(b.note || "").trim().slice(0, 300), how: BK_HOW.includes(b.how) ? b.how : "phone", link: cleanLink(b.link) }; };
     const subOf = mid => (all.find(x => x.mid === mid) || {}).sub;
     const nice = x => { const d = new Date(x.date + "T12:00:00Z"), h = Math.floor(x.start / 60), m = x.start % 60; return `${d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })} ${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; };
     if (parts.length === 3 && M === "POST") {
@@ -518,7 +518,7 @@ async function teams(env, req, s, path, ch) {
       const b = await body(), to = String(b.to || ""); if (!mayBook(to)) return json({ error: "forbidden" }, 403, ch);
       const x = clean(b); if (!x || x.date < today) return json({ error: "bad time" }, 400, ch);
       const open = await env.DB.prepare("SELECT COUNT(*) AS n FROM bkg WHERE team = ? AND a = ? AND state = 'pending'").bind(id, me.mid).first(); if (open && open.n >= 20) return json({ error: "too many open requests" }, 409, ch);
-      const bid = "bk_" + rnd(12), doc = { ...x, hist: [{ by: me.mid, date: x.date, start: x.start, at: now }] };
+      const bid = "bk_" + rnd(12), doc = { ...x, ...(x.link ? { linkBy: me.mid } : {}), hist: [{ by: me.mid, date: x.date, start: x.start, at: now }] };
       await env.DB.prepare("INSERT INTO bkg (team, id, a, b, state, turn, box, day, created, updated) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)").bind(id, bid, me.mid, to, to, await sealT(env, id, "bkg", doc), x.date, now, now).run();
       const s2 = subOf(to); if (s2) await pushTo(env, s2, { title: `${await nameOf(me.mid)} wants time with you`.slice(0, 60), body: `${nice(x)} · tap to accept or suggest another time`, url: "/app/#bookings", tag: "bk-" + bid.slice(3) });
       return json({ id: bid, state: "pending" }, 200, ch);
@@ -535,12 +535,15 @@ async function teams(env, req, s, path, ch) {
       const r = await env.DB.prepare("SELECT id, a, b, state, turn, box FROM bkg WHERE team = ? AND id = ?").bind(id, parts[3]).first();
       if (!r || (r.a !== me.mid && r.b !== me.mid)) return json({ error: "not found" }, 404, ch);
       const b = await body(), act = String(b.action || ""), other = r.a === me.mid ? r.b : r.a; let d; try { d = (await openT(env, id, "bkg", r.box)).doc; } catch (e) { return json({ error: "not found" }, 404, ch); }
-      let state = r.state, turn = r.turn, msg = null;
-      if (act === "cancel") { if (!["pending", "accepted"].includes(r.state)) return json({ error: "closed" }, 409, ch); state = "cancelled"; turn = null; d.reason = String(b.reason || "").trim().slice(0, 140); msg = [`${await nameOf(me.mid)} cancelled`, nice(d)]; }
+      let state = r.state, turn = r.turn, msg = null, linkChanged = false;
+      // either side can add or swap the meeting link when they accept or suggest a time (or set it on an accepted one); "" clears it
+      if (b.link !== undefined && act !== "cancel" && act !== "decline") { const l = cleanLink(b.link); if (b.link !== "" && !l) return json({ error: "bad link" }, 400, ch); if (l !== (d.link || "")) { d.link = l; d.linkBy = l ? me.mid : ""; linkChanged = true; } }
+      if (act === "link") { if (r.state !== "accepted" && r.state !== "pending") return json({ error: "closed" }, 409, ch); if (linkChanged && d.link) msg = [`${await nameOf(me.mid)} added a video link`, `${nice(d)} · tap to see it`]; }
+      else if (act === "cancel") { if (!["pending", "accepted"].includes(r.state)) return json({ error: "closed" }, 409, ch); state = "cancelled"; turn = null; d.reason = String(b.reason || "").trim().slice(0, 140); msg = [`${await nameOf(me.mid)} cancelled`, nice(d)]; }
       else { if (r.state !== "pending" || r.turn !== me.mid) return json({ error: "not your turn" }, 409, ch);
         if (act === "accept") { state = "accepted"; turn = null; msg = [`${await nameOf(me.mid)} accepted`, `${nice(d)} is on both calendars`]; }
         else if (act === "decline") { state = "declined"; turn = null; d.reason = String(b.reason || "").trim().slice(0, 140); msg = [`${await nameOf(me.mid)} can't make it`, d.reason || nice(d)]; }
-        else if (act === "counter") { const x = clean({ ...d, date: b.date, start: b.start, dur: b.dur || d.dur }); if (!x || x.date < today) return json({ error: "bad time" }, 400, ch);
+        else if (act === "counter") { const x = clean({ ...d, link: d.link, date: b.date, start: b.start, dur: b.dur || d.dur }); if (!x || x.date < today) return json({ error: "bad time" }, 400, ch);
           d.date = x.date; d.start = x.start; d.dur = x.dur; d.reason = String(b.reason || "").trim().slice(0, 140); (d.hist = d.hist || []).push({ by: me.mid, date: x.date, start: x.start, at: now }); d.hist = d.hist.slice(-12);
           turn = other; msg = [`${await nameOf(me.mid)} suggested another time`, `${nice(d)}${d.reason ? " · " + d.reason : ""}`]; }
         else return json({ error: "bad action" }, 400, ch); }
@@ -843,6 +846,8 @@ async function partnerSnaps(env, req, s, r, parts, ch) {
 const PUSH_HOSTS = /(^|\.)(fcm\.googleapis\.com|android\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)$/;
 const MAX_Q = 80, MAX_DEVICES = 10, PUSH_AHEAD = 8 * 864e5, PUSH_LATE = 15 * 60000, PUSH_IDLE = 30 * 864e5;
 const PUSH_URL = /^\/app\/(#[a-z]{1,20})?$/, PUSH_TAG = /^[A-Za-z0-9_@|.-]{0,60}$/;
+// a meeting link (Zoom, Teams, Meet…): https only, no user:password inside, no spaces, at most 300 characters. Anything else = no link.
+function cleanLink(v) { const s = String(v == null ? "" : v).trim(); if (!s || s.length > 300 || /\s/.test(s)) return ""; try { const u = new URL(s); if (u.protocol !== "https:" || u.username || u.password || !u.hostname.includes(".")) return ""; return u.href; } catch { return ""; } }
 let pushReady = false, VK = null;
 async function pushInit(env) {
   if (pushReady) return;
@@ -889,7 +894,7 @@ async function sendPush(env, t, msg) {
   const V = await vapidKeys(env), aud = new URL(t.ep).origin;
   const h = b64u(enc.encode(JSON.stringify({ typ: "JWT", alg: "ES256" }))), p = b64u(enc.encode(JSON.stringify({ aud, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: "https://hourline.io" })));
   const sig = b64u(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, V.key, enc.encode(h + "." + p)));
-  const body = await encryptPush(t, JSON.stringify({ title: msg.title, body: msg.body, url: msg.url || "/app/", tag: msg.tag || "" }));
+  const body = await encryptPush(t, JSON.stringify({ title: msg.title, body: msg.body, url: msg.url || "/app/", tag: msg.tag || "", ...(msg.join ? { join: msg.join } : {}) }));
   const r = await fetch(t.ep, { method: "POST", body, headers: { authorization: `vapid t=${h}.${p}.${sig}, k=${V.pub}`, "content-encoding": "aes128gcm", "content-type": "application/octet-stream", ttl: "900", urgency: "high" } });
   return r.status;
 }
@@ -909,7 +914,8 @@ function pushQueue(q, now) {
     if (!x || !Number.isInteger(x.at) || typeof x.title !== "string" || typeof (x.body || "") !== "string") return null;
     if (x.title.length > 60 || (x.body || "").length > 140 || (x.url && !PUSH_URL.test(x.url)) || !PUSH_TAG.test(x.tag || "")) return null;
     if (x.at > now + PUSH_AHEAD) return null;
-    if (x.at > now - 60000) out.push({ at: x.at, title: x.title, body: x.body || "", url: x.url || "/app/", tag: x.tag || "" });
+    if (x.join !== undefined && x.join !== "" && !cleanLink(x.join)) return null;
+    if (x.at > now - 60000) out.push({ at: x.at, title: x.title, body: x.body || "", url: x.url || "/app/", tag: x.tag || "", ...(x.join ? { join: cleanLink(x.join) } : {}) });
   }
   return out.sort((a, b) => a.at - b.at);
 }
