@@ -986,7 +986,7 @@ async function feedRoutes(env, req, s, path, ch) {
   if (path === "/feed" && req.method === "DELETE") { await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
   return json({ error: "not found" }, 404, ch);
 }
-// ---- public booking page: hourline.io/<handle> ----
+// ---- public booking page: hourline.io/b/<handle> ----
 // The owner's app sends the page settings plus busy times only (start/end, never titles), sealed with the owner's key.
 // Anyone can open the page and book an open time without an account. Each booking is sealed with the owner's key; the
 // guest gets a private link to see or cancel it. Emails go through Resend only when RESEND_API_KEY is set.
@@ -1090,7 +1090,7 @@ async function bpPublic(env, req, path, ch, ctx) { // GET /p/<handle>, POST /p/<
     const clash = (await bpBooked(env, handle, now)).filter(x => start < x.e && end > x.s).length; // two people at the same instant: the second one loses
     if (clash > 1) { const first = await env.DB.prepare("SELECT id FROM bbook WHERE handle = ? AND state = 'ok' AND s < ? AND e > ? ORDER BY created, id LIMIT 1").bind(handle, end, start).first();
       if (first && first.id !== id) { await env.DB.prepare("DELETE FROM bbook WHERE id = ?").bind(id).run(); return json({ error: "taken" }, 409, ch); } }
-    const when = bpWhen(start, cfg.tz), owner = cfg.profile.name, manage = "https://hourline.io/" + handle + "?b=" + tok;
+    const when = bpWhen(start, cfg.tz), owner = cfg.profile.name, manage = "https://hourline.io/b/" + handle + "?b=" + tok;
     const where = how === "phone" ? "By phone. " + owner + " will call " + (phone || "you") + "." : how === "person" ? (m.place ? "In person: " + m.place : "In person. " + owner + " will send the address.") : (m.link ? "Video call: " + m.link : owner + " will send a video link.");
     const jobs = [bpMail(env, email, `You're booked with ${owner}: ${m.title}, ${when}`, `Hi ${name.split(" ")[0]},\n\nYou're booked.\n\n${m.title} (${m.len} min) with ${owner}\n${when}\n${where}\n${m.before ? "\nBefore we meet: " + m.before + "\n" : ""}${cfg.thanks ? "\n" + cfg.thanks.replace(/\{first name\}/gi, name.split(" ")[0]) + "\n" : ""}\nNeed to change or cancel? ${manage}\n\nSent by Hourline for ${owner}. Reply to this email to reach ${owner}.`, cfg.email || null),
       cfg.notify && cfg.email ? bpMail(env, cfg.email, `New booking: ${name}, ${m.title}, ${when}`, `${name} booked ${m.title} (${m.len} min)\n${when}\nHow: ${how}\nEmail: ${email}${phone ? "\nPhone: " + phone : ""}${m.q ? "\n" + m.q + " " + (answer || "(no answer)") : ""}${note ? "\nNote: " + note : ""}\n\nIt's on your week in Hourline.`, email) : Promise.resolve(false),
@@ -1117,7 +1117,7 @@ async function bpPublic(env, req, path, ch, ctx) { // GET /p/<handle>, POST /p/<
 async function bpOwner(env, req, s, path, ch, ctx) { // the owner's app: claim a link, save the page, see and cancel bookings
   await bpInit(env);
   const now = Date.now(), M = req.method, row = await env.DB.prepare("SELECT handle, box, updated FROM bpages WHERE sub = ?").bind(s.sub).first();
-  if (path === "/bpage" && M === "GET") { if (!row) return json({ on: false }, 200, ch); return json({ on: true, handle: row.handle, url: "https://hourline.io/" + row.handle, updated: row.updated }, 200, ch); }
+  if (path === "/bpage" && M === "GET") { if (!row) return json({ on: false }, 200, ch); return json({ on: true, handle: row.handle, url: "https://hourline.io/b/" + row.handle, updated: row.updated }, 200, ch); }
   if (path === "/bpage/check" && M === "GET") { const h = String(new URL(req.url).searchParams.get("h") || "").toLowerCase(); if (!bpHandleOk(h)) return json({ ok: false, why: "format" }, 200, ch);
     const t = await env.DB.prepare("SELECT sub FROM bpages WHERE handle = ?").bind(h).first(); return json({ ok: !t || t.sub === s.sub }, 200, ch); }
   if (path === "/bpage" && M === "PUT") {
@@ -1130,7 +1130,7 @@ async function bpOwner(env, req, s, path, ch, ctx) { // the owner's app: claim a
     const taken = await env.DB.prepare("SELECT sub FROM bpages WHERE handle = ?").bind(h).first(); if (taken && taken.sub !== s.sub) return json({ error: "taken" }, 409, ch);
     if (row && row.handle !== h) { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("UPDATE bbook SET handle = ? WHERE sub = ?").bind(h, s.sub).run(); }
     await env.DB.prepare("INSERT INTO bpages (handle, sub, box, updated) VALUES (?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(h, s.sub, await seal(env, s.sub, cfg), now).run();
-    return json({ ok: true, handle: h, url: "https://hourline.io/" + h, mail: !!env.RESEND_API_KEY }, 200, ch);
+    return json({ ok: true, handle: h, url: "https://hourline.io/b/" + h, mail: !!env.RESEND_API_KEY }, 200, ch);
   }
   if (path === "/bpage" && M === "DELETE") { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
   if (path === "/bpage/bookings" && M === "GET") {
@@ -1143,7 +1143,7 @@ async function bpOwner(env, req, s, path, ch, ctx) { // the owner's app: claim a
     const r = await env.DB.prepare("SELECT id, s, box, state FROM bbook WHERE id = ? AND sub = ?").bind(mc[1], s.sub).first(); if (!r) return json({ error: "not found" }, 404, ch);
     if (r.state === "ok") { await env.DB.prepare("UPDATE bbook SET state = 'cancelled' WHERE id = ?").bind(r.id).run();
       const d = (await open(env, s.sub, r.box)).doc, pgc = row ? (await open(env, s.sub, row.box)).doc : null, who = pgc ? pgc.profile.name : "Your host";
-      const j = bpMail(env, d.email, `Cancelled: ${d.title} with ${who}`, `Hi ${d.name.split(" ")[0]},\n\n${who} had to cancel ${d.title} on ${bpWhen(r.s, pgc ? pgc.tz : "America/Chicago")}.${row ? "\n\nPick a new time: https://hourline.io/" + row.handle : ""}\n\nSent by Hourline for ${who}.`, pgc && pgc.email || null);
+      const j = bpMail(env, d.email, `Cancelled: ${d.title} with ${who}`, `Hi ${d.name.split(" ")[0]},\n\n${who} had to cancel ${d.title} on ${bpWhen(r.s, pgc ? pgc.tz : "America/Chicago")}.${row ? "\n\nPick a new time: https://hourline.io/b/" + row.handle : ""}\n\nSent by Hourline for ${who}.`, pgc && pgc.email || null);
       if (ctx && ctx.waitUntil) ctx.waitUntil(j); else await j; }
     return json({ ok: true }, 200, ch);
   }
