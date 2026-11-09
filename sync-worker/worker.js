@@ -986,6 +986,169 @@ async function feedRoutes(env, req, s, path, ch) {
   if (path === "/feed" && req.method === "DELETE") { await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
   return json({ error: "not found" }, 404, ch);
 }
+// ---- public booking page: hourline.io/<handle> ----
+// The owner's app sends the page settings plus busy times only (start/end, never titles), sealed with the owner's key.
+// Anyone can open the page and book an open time without an account. Each booking is sealed with the owner's key; the
+// guest gets a private link to see or cancel it. Emails go through Resend only when RESEND_API_KEY is set.
+let bpReady = false;
+async function bpInit(env) { if (bpReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS bpages (handle TEXT PRIMARY KEY, sub TEXT NOT NULL UNIQUE, box TEXT NOT NULL, updated INTEGER NOT NULL)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS bbook (id TEXT PRIMARY KEY, handle TEXT NOT NULL, sub TEXT NOT NULL, s INTEGER NOT NULL, e INTEGER NOT NULL, box TEXT NOT NULL, state TEXT NOT NULL, tok TEXT NOT NULL, ip TEXT NOT NULL, created INTEGER NOT NULL)").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS bbook_h ON bbook (handle, s)").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS bbook_sub ON bbook (sub, s)").run();
+  bpReady = true; }
+const BP_RESERVED = new Set(["app", "api", "admin", "privacy", "terms", "book", "booking", "b", "p", "login", "signin", "signup", "settings", "help", "support", "about", "pricing", "blog", "team", "teams", "hourline", "www", "mail", "static", "assets", "fonts", "marketing", "index", "cal", "feed", "join", "invite", "home", "security", "status", "legal", "contact"]);
+const bpHandleOk = h => typeof h === "string" && /^[a-z0-9](?:[a-z0-9-]{1,28})[a-z0-9]$/.test(h) && !h.includes("--") && !BP_RESERVED.has(h);
+const BP_LOOKS = ["night", "grid", "split", "clean"], BP_HOW = ["video", "phone", "person"];
+const bpStr = (v, n) => String(v == null ? "" : v).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, n);
+const bpTz = z => { try { new Intl.DateTimeFormat("en-US", { timeZone: String(z) }); return String(z).slice(0, 60); } catch { return "America/Chicago"; } };
+function bpUrl(v) { const s = String(v || "").trim(); if (!s || s.length > 200) return ""; try { const u = new URL(/^https?:\/\//i.test(s) ? s : "https://" + s); return u.protocol === "https:" && !u.username && !u.password && u.hostname.includes(".") ? u.href : ""; } catch { return ""; } }
+function bpClean(b, now) {
+  if (!b || typeof b !== "object") return null;
+  const look = b.look && typeof b.look === "object" ? b.look : {};
+  const pr = b.profile && typeof b.profile === "object" ? b.profile : {};
+  const hours = {}; if (b.hours && typeof b.hours === "object") for (const [k, v] of Object.entries(b.hours)) if (/^[0-6]$/.test(k) && Array.isArray(v) && v.length === 2 && v.every(x => typeof x === "number" && x >= 0 && x <= 24) && v[0] < v[1]) hours[k] = [Math.round(v[0] * 2) / 2, Math.round(v[1] * 2) / 2];
+  const meetings = (Array.isArray(b.meetings) ? b.meetings : []).slice(0, 8).map((m, i) => ({
+    id: /^[a-z0-9]{1,12}$/.test(String(m && m.id)) ? String(m.id) : "m" + i, on: m && m.on !== false,
+    title: bpStr(m && m.title, 60) || "Meeting", len: [15, 30, 45, 60, 90].includes(+(m && m.len)) ? +m.len : 30, sub: bpStr(m && m.sub, 160),
+    how: (Array.isArray(m && m.how) ? m.how : ["video"]).filter(x => BP_HOW.includes(x)).slice(0, 3), before: bpStr(m && m.before, 240),
+    q: bpStr(m && m.q, 120), qreq: !!(m && m.qreq), notice: [0, 120, 1440].includes(+(m && m.notice)) ? +m.notice : 120,
+    ahead: [14, 30, 90].includes(+(m && m.ahead)) ? +m.ahead : 30, max: Math.max(1, Math.min(12, Math.round(+(m && m.max) || 4))),
+    link: cleanLink(m && m.link), place: bpStr(m && m.place, 200) })).filter(m => m.title);
+  if (!meetings.length) return null;
+  const busy = (Array.isArray(b.busy) ? b.busy : []).filter(x => Array.isArray(x) && x.length === 2 && Number.isFinite(x[0]) && Number.isFinite(x[1]) && x[1] > x[0] && x[1] > now - 864e5 && x[0] < now + 100 * 864e5 && x[1] - x[0] <= 3 * 864e5).slice(0, 1500).map(x => [Math.round(x[0]), Math.round(x[1])]);
+  return {
+    look: { name: BP_LOOKS.includes(look.name) ? look.name : "night", accent: /^#[0-9a-f]{6}$/i.test(look.accent || "") ? String(look.accent).toLowerCase() : "#2f5bff", photo: look.photo !== false },
+    profile: { name: bpStr(pr.name, 60) || "Hourline user", intro: bpStr(pr.intro, 240), cred: bpStr(pr.cred, 120),
+      links: (Array.isArray(pr.links) ? pr.links : []).slice(0, 3).map(l => ({ k: bpStr(l && l.k, 20), url: bpUrl(l && l.url) })).filter(l => l.k && l.url) },
+    tz: bpTz(b.tz), hours, meetings, busy, buffer: [0, 5, 10, 15, 30].includes(+b.buffer) ? +b.buffer : 15, thanks: bpStr(b.thanks, 300), notify: b.notify !== false };
+}
+const bpDtf = {};
+function bpOff(ms, z) { const f = bpDtf[z] || (bpDtf[z] = new Intl.DateTimeFormat("en-US", { timeZone: z, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }));
+  const p = {}; for (const x of f.formatToParts(new Date(ms))) p[x.type] = x.value; return (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute) - Math.floor(ms / 6e4) * 6e4) / 6e4; }
+function bpWall(y, mo, d, mins, z) { const g = Date.UTC(y, mo, d, 0, mins); const t = g - bpOff(g, z) * 6e4; return g - bpOff(t, z) * 6e4; }
+function bpLocalDay(ms, z) { const t = ms + bpOff(ms, z) * 6e4, d = new Date(t); return { y: d.getUTCFullYear(), mo: d.getUTCMonth(), d: d.getUTCDate(), dow: d.getUTCDay(), key: d.toISOString().slice(0, 10) }; }
+function bpSlots(cfg, m, booked, now) { // open start times for one kind of meeting, grouped by local day
+  const out = [], len = m.len * 6e4, buf = cfg.buffer * 6e4, step = (m.len === 15 ? 15 : 30) * 6e4, earliest = now + m.notice * 6e4;
+  const blocks = [...cfg.busy, ...booked.map(x => [x.s - buf, x.e + buf])];
+  const perDay = {}; for (const x of booked) { const k = bpLocalDay(x.s, cfg.tz).key; perDay[k] = (perDay[k] || 0) + 1; }
+  const first = bpLocalDay(now, cfg.tz);
+  for (let i = 0; i <= m.ahead && out.length < 45; i++) {
+    const base = Date.UTC(first.y, first.mo, first.d + i), dd = new Date(base), dow = dd.getUTCDay(), key = dd.toISOString().slice(0, 10), h = cfg.hours[dow];
+    if (!h || (perDay[key] || 0) >= m.max) continue;
+    const times = [];
+    for (let mins = h[0] * 60; mins + m.len <= h[1] * 60; mins += step / 6e4) {
+      const s = bpWall(dd.getUTCFullYear(), dd.getUTCMonth(), dd.getUTCDate(), mins, cfg.tz), e = s + len;
+      if (s < earliest) continue;
+      if (blocks.some(([a, b]) => s < b && e > a)) continue;
+      times.push(s); if (times.length >= 24) break;
+    }
+    if (times.length) out.push({ day: key, times });
+  }
+  return out;
+}
+async function bpLoad(env, handle) { const row = await env.DB.prepare("SELECT sub, box FROM bpages WHERE handle = ?").bind(handle).first(); if (!row) return null;
+  try { return { sub: row.sub, cfg: (await open(env, row.sub, row.box)).doc }; } catch { return null; } }
+async function bpBooked(env, handle, now) { return (await env.DB.prepare("SELECT s, e FROM bbook WHERE handle = ? AND state = 'ok' AND e > ?").bind(handle, now - 864e5).all()).results || []; }
+function bpWhen(ms, z) { try { return new Intl.DateTimeFormat("en-US", { timeZone: z, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(ms)); } catch { return new Date(ms).toUTCString(); } }
+async function bpMail(env, to, subject, text, replyTo) { // best effort; never blocks a booking
+  if (!env.RESEND_API_KEY || !to) return false;
+  try { const ac = new AbortController(), t = setTimeout(() => ac.abort(), 6000);
+    const r = await fetch(env.RESEND_URL || "https://api.resend.com/emails", { method: "POST", signal: ac.signal, headers: { authorization: "Bearer " + env.RESEND_API_KEY, "content-type": "application/json" },
+      body: JSON.stringify({ from: env.MAIL_FROM || "Hourline <bookings@hourline.io>", to: [to], subject: subject.slice(0, 160), text, ...(replyTo ? { reply_to: replyTo } : {}) }) });
+    clearTimeout(t); return r.ok; } catch { return false; } }
+const bpEmailOk = v => /^[^\s@<>"]{1,64}@[^\s@<>"]{1,180}\.[a-z]{2,}$/i.test(String(v || ""));
+async function bpPublic(env, req, path, ch, ctx) { // GET /p/<handle>, POST /p/<handle>/book, GET|POST /p/<handle>/b/<tok>[/cancel]
+  await bpInit(env);
+  const parts = path.split("/").filter(Boolean), handle = String(parts[1] || "").toLowerCase(), now = Date.now();
+  if (!bpHandleOk(handle)) return json({ error: "not found" }, 404, ch);
+  if (limited(req, 90, "bp")) return json({ error: "slow down" }, 429, ch);
+  const pg = await bpLoad(env, handle); if (!pg) return json({ error: "not found" }, 404, ch);
+  const cfg = pg.cfg;
+  if (parts.length === 2 && req.method === "GET") {
+    const booked = await bpBooked(env, handle, now);
+    return json({ handle, look: cfg.look, profile: cfg.profile, tz: cfg.tz, thanks: "", made: true,
+      meetings: cfg.meetings.filter(m => m.on).map(m => ({ id: m.id, title: m.title, len: m.len, sub: m.sub, how: m.how, before: m.before, q: m.q, qreq: m.qreq, days: bpSlots(cfg, m, booked, now) })) }, 200, { ...ch, "cache-control": "no-store" });
+  }
+  if (parts.length === 3 && parts[2] === "book" && req.method === "POST") {
+    if (limited(req, 6, "bpbook")) return json({ error: "slow down" }, 429, ch);
+    let b; try { const raw = await req.text(); if (raw.length > 6000) return json({ error: "too big" }, 413, ch); b = JSON.parse(raw); } catch { return json({ error: "bad json" }, 400, ch); }
+    if (b && b.hp) return json({ ok: true }, 200, ch); // a robot filled the hidden field: pretend it worked, save nothing
+    const m = cfg.meetings.find(x => x.on && x.id === String(b && b.m)); if (!m) return json({ error: "no such meeting" }, 400, ch);
+    const name = bpStr(b.name, 80), email = bpStr(b.email, 200).toLowerCase(), phone = bpStr(b.phone, 30).replace(/[^0-9+()\- .]/g, ""), answer = bpStr(b.answer, 300), note = bpStr(b.note, 600);
+    const how = BP_HOW.includes(b.how) && m.how.includes(b.how) ? b.how : m.how[0] || "video";
+    if (!name || !bpEmailOk(email)) return json({ error: "name and email needed" }, 400, ch);
+    if (m.qreq && m.q && !answer) return json({ error: "answer needed" }, 400, ch);
+    const ip = await sha256("bpip:" + (req.headers.get("cf-connecting-ip") || "local") + ":" + handle);
+    const mine = await env.DB.prepare("SELECT COUNT(*) AS n FROM bbook WHERE handle = ? AND ip = ? AND created > ?").bind(handle, ip, now - 864e5).first();
+    if (mine && mine.n >= 3) return json({ error: "too many bookings today" }, 429, ch);
+    const start = Math.round(+b.s), booked = await bpBooked(env, handle, now);
+    if (!bpSlots(cfg, m, booked, now).some(d => d.times.includes(start))) return json({ error: "taken" }, 409, ch);
+    const id = "bk_" + rnd(9), tok = rnd(18), end = start + m.len * 6e4;
+    const doc = { m: m.id, title: m.title, len: m.len, how, name, email, phone, answer, q: m.q, note, created: now };
+    await env.DB.prepare("INSERT INTO bbook (id, handle, sub, s, e, box, state, tok, ip, created) VALUES (?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?)").bind(id, handle, pg.sub, start, end, await seal(env, pg.sub, doc), await sha256("bptok:" + tok), ip, now).run();
+    const clash = (await bpBooked(env, handle, now)).filter(x => start < x.e && end > x.s).length; // two people at the same instant: the second one loses
+    if (clash > 1) { const first = await env.DB.prepare("SELECT id FROM bbook WHERE handle = ? AND state = 'ok' AND s < ? AND e > ? ORDER BY created, id LIMIT 1").bind(handle, end, start).first();
+      if (first && first.id !== id) { await env.DB.prepare("DELETE FROM bbook WHERE id = ?").bind(id).run(); return json({ error: "taken" }, 409, ch); } }
+    const when = bpWhen(start, cfg.tz), owner = cfg.profile.name, manage = "https://hourline.io/" + handle + "?b=" + tok;
+    const where = how === "phone" ? "By phone. " + owner + " will call " + (phone || "you") + "." : how === "person" ? (m.place ? "In person: " + m.place : "In person. " + owner + " will send the address.") : (m.link ? "Video call: " + m.link : owner + " will send a video link.");
+    const jobs = [bpMail(env, email, `You're booked with ${owner}: ${m.title}, ${when}`, `Hi ${name.split(" ")[0]},\n\nYou're booked.\n\n${m.title} (${m.len} min) with ${owner}\n${when}\n${where}\n${m.before ? "\nBefore we meet: " + m.before + "\n" : ""}${cfg.thanks ? "\n" + cfg.thanks.replace(/\{first name\}/gi, name.split(" ")[0]) + "\n" : ""}\nNeed to change or cancel? ${manage}\n\nSent by Hourline for ${owner}. Reply to this email to reach ${owner}.`, cfg.email || null),
+      cfg.notify && cfg.email ? bpMail(env, cfg.email, `New booking: ${name}, ${m.title}, ${when}`, `${name} booked ${m.title} (${m.len} min)\n${when}\nHow: ${how}\nEmail: ${email}${phone ? "\nPhone: " + phone : ""}${m.q ? "\n" + m.q + " " + (answer || "(no answer)") : ""}${note ? "\nNote: " + note : ""}\n\nIt's on your week in Hourline.`, email) : Promise.resolve(false),
+      pushTo(env, pg.sub, { title: "New booking", body: `${name} · ${m.title} · ${when}`, url: "/app/#bookings", tag: "bk" + id })];
+    if (ctx && ctx.waitUntil) ctx.waitUntil(Promise.all(jobs)); else await Promise.all(jobs);
+    return json({ ok: true, s: start, e: end, title: m.title, len: m.len, how, when, thanks: cfg.thanks.replace(/\{first name\}/gi, name.split(" ")[0]), link: how === "video" ? m.link : "", place: how === "person" ? m.place : "", manage: tok, mailed: !!env.RESEND_API_KEY }, 200, ch);
+  }
+  if (parts.length >= 4 && parts[2] === "b") {
+    const tok = String(parts[3] || ""); if (!/^[A-Za-z0-9_-]{20,40}$/.test(tok)) return json({ error: "not found" }, 404, ch);
+    const row = await env.DB.prepare("SELECT id, s, e, box, state FROM bbook WHERE handle = ? AND tok = ?").bind(handle, await sha256("bptok:" + tok)).first();
+    if (!row) return json({ error: "not found" }, 404, ch);
+    const d = (await open(env, pg.sub, row.box)).doc;
+    if (parts.length === 4 && req.method === "GET") return json({ title: d.title, len: d.len, s: row.s, e: row.e, when: bpWhen(row.s, cfg.tz), state: row.state, name: d.name.split(" ")[0] }, 200, ch);
+    if (parts.length === 5 && parts[4] === "cancel" && req.method === "POST") {
+      if (row.state === "ok") { await env.DB.prepare("UPDATE bbook SET state = 'cancelled' WHERE id = ?").bind(row.id).run();
+        const when = bpWhen(row.s, cfg.tz), jobs = [cfg.notify && cfg.email ? bpMail(env, cfg.email, `Cancelled: ${d.name}, ${d.title}, ${when}`, `${d.name} cancelled ${d.title} on ${when}. The time is open again on your booking page.`, d.email) : Promise.resolve(false),
+          pushTo(env, pg.sub, { title: "Booking cancelled", body: `${d.name} · ${d.title} · ${when}`, url: "/app/#bookings", tag: "bk" + row.id })];
+        if (ctx && ctx.waitUntil) ctx.waitUntil(Promise.all(jobs)); else await Promise.all(jobs); }
+      return json({ ok: true, state: "cancelled" }, 200, ch);
+    }
+  }
+  return json({ error: "not found" }, 404, ch);
+}
+async function bpOwner(env, req, s, path, ch, ctx) { // the owner's app: claim a link, save the page, see and cancel bookings
+  await bpInit(env);
+  const now = Date.now(), M = req.method, row = await env.DB.prepare("SELECT handle, box, updated FROM bpages WHERE sub = ?").bind(s.sub).first();
+  if (path === "/bpage" && M === "GET") { if (!row) return json({ on: false }, 200, ch); return json({ on: true, handle: row.handle, url: "https://hourline.io/" + row.handle, updated: row.updated }, 200, ch); }
+  if (path === "/bpage/check" && M === "GET") { const h = String(new URL(req.url).searchParams.get("h") || "").toLowerCase(); if (!bpHandleOk(h)) return json({ ok: false, why: "format" }, 200, ch);
+    const t = await env.DB.prepare("SELECT sub FROM bpages WHERE handle = ?").bind(h).first(); return json({ ok: !t || t.sub === s.sub }, 200, ch); }
+  if (path === "/bpage" && M === "PUT") {
+    if (limited(req, 30, "bpput")) return json({ error: "slow down" }, 429, ch);
+    const raw = await req.text(); if (raw.length > 200_000) return json({ error: "too big" }, 413, ch);
+    let b; try { b = JSON.parse(raw); } catch { return json({ error: "bad json" }, 400, ch); }
+    const h = String(b && b.handle || (row && row.handle) || "").toLowerCase(); if (!bpHandleOk(h)) return json({ error: "bad link name" }, 400, ch);
+    const cfg = bpClean(b, now); if (!cfg) return json({ error: "bad page" }, 400, ch);
+    if (cfg.notify && bpEmailOk(s.email)) cfg.email = String(s.email).toLowerCase();
+    const taken = await env.DB.prepare("SELECT sub FROM bpages WHERE handle = ?").bind(h).first(); if (taken && taken.sub !== s.sub) return json({ error: "taken" }, 409, ch);
+    if (row && row.handle !== h) { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("UPDATE bbook SET handle = ? WHERE sub = ?").bind(h, s.sub).run(); }
+    await env.DB.prepare("INSERT INTO bpages (handle, sub, box, updated) VALUES (?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(h, s.sub, await seal(env, s.sub, cfg), now).run();
+    return json({ ok: true, handle: h, url: "https://hourline.io/" + h, mail: !!env.RESEND_API_KEY }, 200, ch);
+  }
+  if (path === "/bpage" && M === "DELETE") { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
+  if (path === "/bpage/bookings" && M === "GET") {
+    const rows = (await env.DB.prepare("SELECT id, s, e, box, state, created FROM bbook WHERE sub = ? AND e > ? ORDER BY s LIMIT 300").bind(s.sub, now - 30 * 864e5).all()).results || [];
+    const out = []; for (const r of rows) { try { const d = (await open(env, s.sub, r.box)).doc; out.push({ id: r.id, s: r.s, e: r.e, state: r.state, created: r.created, title: d.title, len: d.len, how: d.how, name: d.name, email: d.email, phone: d.phone, q: d.q, answer: d.answer, note: d.note }); } catch { } }
+    return json({ bookings: out }, 200, ch);
+  }
+  const mc = path.match(/^\/bpage\/bookings\/(bk_[A-Za-z0-9_-]{8,20})\/cancel$/);
+  if (mc && M === "POST") {
+    const r = await env.DB.prepare("SELECT id, s, box, state FROM bbook WHERE id = ? AND sub = ?").bind(mc[1], s.sub).first(); if (!r) return json({ error: "not found" }, 404, ch);
+    if (r.state === "ok") { await env.DB.prepare("UPDATE bbook SET state = 'cancelled' WHERE id = ?").bind(r.id).run();
+      const d = (await open(env, s.sub, r.box)).doc, pgc = row ? (await open(env, s.sub, row.box)).doc : null, who = pgc ? pgc.profile.name : "Your host";
+      const j = bpMail(env, d.email, `Cancelled: ${d.title} with ${who}`, `Hi ${d.name.split(" ")[0]},\n\n${who} had to cancel ${d.title} on ${bpWhen(r.s, pgc ? pgc.tz : "America/Chicago")}.${row ? "\n\nPick a new time: https://hourline.io/" + row.handle : ""}\n\nSent by Hourline for ${who}.`, pgc && pgc.email || null);
+      if (ctx && ctx.waitUntil) ctx.waitUntil(j); else await j; }
+    return json({ ok: true }, 200, ch);
+  }
+  return json({ error: "not found" }, 404, ch);
+}
 // ---- reading someone's other calendar by its link (Google secret address, iCloud public link, Outlook ICS link) ----
 // The app can't read those addresses itself (the calendar sites don't allow it from a web page), so the server fetches
 // the file and hands back the text. Nothing is stored. Only public https addresses on standard port 443: no IP
@@ -1393,7 +1556,7 @@ function limited(req, max, bucket = "auth") { // separate counters per kind of r
 const validState = s => /^[A-Za-z0-9_-]{22,64}$/.test(s || "");
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url), path = url.pathname, ch = cors(env, req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...ch, ...SEC } });
     // Emergency switch: set LOCKDOWN = 1 in Worker settings to stop all sign-ins and data access at once (the app keeps working
@@ -1474,6 +1637,7 @@ export default {
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await feedInit(env); await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run();
+          await bpInit(env); await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM bbook WHERE sub = ?").bind(s.sub).run();
           await gcalInit(env); { const g = await env.DB.prepare("SELECT box FROM gcal WHERE sub = ?").bind(s.sub).first(); if (g) { try { const d = (await open(env, s.sub, g.box)).doc; await fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(d.rt), { method: "POST" }); } catch (e) { } } }
           await env.DB.prepare("DELETE FROM gcal WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM gcal_state WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
@@ -1500,6 +1664,8 @@ export default {
       if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
       if (req.method === "GET" && path.startsWith("/cal/") && path.endsWith(".ics")) return await feedPublic(env, req, path.slice(5, -4));
       if (path === "/gcal/callback" && req.method === "GET") return await gcalCallback(env, req, url);
+      if (path.startsWith("/p/")) return await bpPublic(env, req, path, ch, ctx);
+      if (path === "/bpage" || path.startsWith("/bpage/")) { if (!s) return json({ error: "signed out" }, 401, ch); return await bpOwner(env, req, s, path, ch, ctx); }
       if (path === "/gcal" || path.startsWith("/gcal/")) { if (!s) return json({ error: "signed out" }, 401, ch); return await gcalRoutes(env, req, s, path, ch); }
       if (path === "/ics/fetch" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await icsFetchRoute(env, req, s, ch); }
       if (path === "/feed" || path === "/feed/reset") { if (!s) return json({ error: "signed out" }, 401, ch); return await feedRoutes(env, req, s, path, ch); }
