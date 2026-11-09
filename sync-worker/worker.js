@@ -999,7 +999,14 @@ async function bpInit(env) { if (bpReady) return;
   bpReady = true; }
 const BP_RESERVED = new Set(["app", "api", "admin", "privacy", "terms", "book", "booking", "b", "p", "login", "signin", "signup", "settings", "help", "support", "about", "pricing", "blog", "team", "teams", "hourline", "www", "mail", "static", "assets", "fonts", "marketing", "index", "cal", "feed", "join", "invite", "home", "security", "status", "legal", "contact"]);
 const bpHandleOk = h => typeof h === "string" && /^[a-z0-9](?:[a-z0-9-]{1,28})[a-z0-9]$/.test(h) && !h.includes("--") && !BP_RESERVED.has(h);
-const BP_LOOKS = ["night", "grid", "split", "clean"], BP_HOW = ["video", "phone", "person"];
+const BP_LOOKS = ["night", "grid", "split", "clean"], BP_HOW = ["video", "phone", "person"], BP_THEMES = ["classic", "floral", "forest"], BP_PAYWHEN = ["all", "eve", "wkd"];
+// the owner's own pictures: a small face photo and a wider cover, shrunk on their phone before upload; JPEG or WebP only
+const bpPic = (v, max) => typeof v === "string" && v.length <= max && /^data:image\/(jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v) ? v : "";
+const BP_PHOTO_MAX = 60_000, BP_COVER_MAX = 160_000;
+// what a time costs: the owner can charge every time, or only evenings and weekends (5 pm on, Sat, Sun), or only weekends, in the page's time zone
+function bpPriceAt(m, start, tz) { const p = m.price || 0; if (!p || !m.payWhen || m.payWhen === "all") return p;
+  const d = new Date(start + bpOff(start, tz) * 6e4), wd = d.getUTCDay(), wknd = wd === 0 || wd === 6;
+  return m.payWhen === "wkd" ? (wknd ? p : 0) : (wknd || d.getUTCHours() >= 17 ? p : 0); }
 const bpStr = (v, n) => String(v == null ? "" : v).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, n);
 const bpTz = z => { try { new Intl.DateTimeFormat("en-US", { timeZone: String(z) }); return String(z).slice(0, 60); } catch { return "America/Chicago"; } };
 function bpUrl(v) { const s = String(v || "").trim(); if (!s || s.length > 200) return ""; try { const u = new URL(/^https?:\/\//i.test(s) ? s : "https://" + s); return u.protocol === "https:" && !u.username && !u.password && u.hostname.includes(".") ? u.href : ""; } catch { return ""; } }
@@ -1015,12 +1022,14 @@ function bpClean(b, now) {
     q: bpStr(m && m.q, 120), qreq: !!(m && m.qreq), notice: [0, 120, 1440].includes(+(m && m.notice)) ? +m.notice : 120,
     ahead: [14, 30, 90].includes(+(m && m.ahead)) ? +m.ahead : 30, max: Math.max(1, Math.min(12, Math.round(+(m && m.max) || 4))),
     link: cleanLink(m && m.link), place: bpStr(m && m.place, 200),
-    price: Math.max(0, Math.min(100_000_00, Math.round(+(m && m.price) || 0))), currency: "usd" })).map(m => ({ ...m, price: m.price && m.price < 100 ? 0 : m.price })).filter(m => m.title);
+    price: Math.max(0, Math.min(100_000_00, Math.round(+(m && m.price) || 0))), currency: "usd",
+    payWhen: BP_PAYWHEN.includes(m && m.payWhen) ? m.payWhen : "all", dep: !!(m && m.dep) })).map(m => ({ ...m, price: m.price && m.price < 100 ? 0 : m.price })).filter(m => m.title);
   if (!meetings.length) return null;
   const busy = (Array.isArray(b.busy) ? b.busy : []).filter(x => Array.isArray(x) && x.length === 2 && Number.isFinite(x[0]) && Number.isFinite(x[1]) && x[1] > x[0] && x[1] > now - 864e5 && x[0] < now + 100 * 864e5 && x[1] - x[0] <= 3 * 864e5).slice(0, 1500).map(x => [Math.round(x[0]), Math.round(x[1])]);
   return {
-    look: { name: BP_LOOKS.includes(look.name) ? look.name : "night", accent: /^#[0-9a-f]{6}$/i.test(look.accent || "") ? String(look.accent).toLowerCase() : "#2f5bff", photo: look.photo !== false, pattern: ["solid", "dots", "grid", "lines", "fade"].includes(look.pattern) ? look.pattern : "solid" },
-    profile: { name: bpStr(pr.name, 60) || "Hourline user", intro: bpStr(pr.intro, 240), cred: bpStr(pr.cred, 120),
+    look: { name: BP_LOOKS.includes(look.name) ? look.name : "night", accent: /^#[0-9a-f]{6}$/i.test(look.accent || "") ? String(look.accent).toLowerCase() : "#2f5bff", photo: look.photo !== false, pattern: ["solid", "dots", "grid", "lines", "fade"].includes(look.pattern) ? look.pattern : "solid",
+      theme: BP_THEMES.includes(look.theme) ? look.theme : "classic", cover: bpPic(look.cover, BP_COVER_MAX) },
+    profile: { name: bpStr(pr.name, 60) || "Hourline user", intro: bpStr(pr.intro, 240), cred: bpStr(pr.cred, 120), photo: bpPic(pr.photo, BP_PHOTO_MAX),
       links: (Array.isArray(pr.links) ? pr.links : []).slice(0, 3).map(l => ({ k: bpStr(l && l.k, 20), url: bpUrl(l && l.url) })).filter(l => l.k && l.url) },
     tz: bpTz(b.tz), hours, meetings, busy, buffer: [0, 5, 10, 15, 30].includes(+b.buffer) ? +b.buffer : 15, thanks: bpStr(b.thanks, 300), notify: b.notify !== false };
 }
@@ -1102,7 +1111,7 @@ async function payRoutes(env, req, s, path, ch) { // owner: GET /bpage/pay, POST
 async function payCheckout(env, { handle, m, id, tok, email, acct, ownerName }) { // a Stripe checkout page for one held booking
   const site = env.APP_ORIGIN || "https://hourline.io", fee = Math.floor(m.price * Math.max(0, Math.min(3000, +env.PLATFORM_FEE_BPS || 0)) / 10000);
   const sess = await stripe(env, "POST", "/v1/checkout/sessions", { mode: "payment", customer_email: email, expires_at: Math.floor((Date.now() + 31 * 60000) / 1000),
-    line_items: { 0: { quantity: 1, price_data: { currency: m.currency, unit_amount: m.price, product_data: { name: `${m.title} with ${ownerName}`.slice(0, 120) } } } },
+    line_items: { 0: { quantity: 1, price_data: { currency: m.currency, unit_amount: m.price, product_data: { name: `${m.dep ? "Deposit: " : ""}${m.title} with ${ownerName}`.slice(0, 120) } } } },
     payment_intent_data: { transfer_data: { destination: acct }, ...(fee ? { application_fee_amount: fee } : {}), metadata: { booking: id, handle } },
     metadata: { booking: id, handle }, success_url: `${site}/b/${handle}?b=${tok}&paid=1`, cancel_url: `${site}/b/${handle}?b=${tok}&unpaid=1` }, "cs-" + id);
   await env.DB.prepare("INSERT INTO bpaid (booking, sess, amount, currency, state, updated) VALUES (?, ?, ?, ?, 'open', ?)").bind(id, sess.id, m.price, m.currency, Date.now()).run();
@@ -1168,7 +1177,7 @@ async function bpPublic(env, req, path, ch, ctx) { // GET /p/<handle>, POST /p/<
   if (parts.length === 2 && req.method === "GET") {
     const booked = await bpBooked(env, handle, now), pa = env.STRIPE_SECRET_KEY ? await payAcct(env, pg.sub) : null;
     return json({ handle, look: cfg.look, profile: cfg.profile, tz: cfg.tz, thanks: "", made: true,
-      pay: !!(pa && pa.ready), meetings: cfg.meetings.filter(m => m.on).map(m => ({ id: m.id, title: m.title, len: m.len, sub: m.sub, how: m.how, before: m.before, q: m.q, qreq: m.qreq, price: m.price || 0, currency: m.currency || "usd", days: bpSlots(cfg, m, booked, now) })) }, 200, { ...ch, "cache-control": "no-store" });
+      pay: !!(pa && pa.ready), meetings: cfg.meetings.filter(m => m.on).map(m => ({ id: m.id, title: m.title, len: m.len, sub: m.sub, how: m.how, before: m.before, q: m.q, qreq: m.qreq, price: m.price || 0, currency: m.currency || "usd", payWhen: m.payWhen || "all", dep: !!m.dep, days: bpSlots(cfg, m, booked, now) })) }, 200, { ...ch, "cache-control": "no-store" });
   }
   if (parts.length === 3 && parts[2] === "book" && req.method === "POST") {
     if (limited(req, 6, "bpbook")) return json({ error: "slow down" }, 429, ch);
@@ -1184,16 +1193,16 @@ async function bpPublic(env, req, path, ch, ctx) { // GET /p/<handle>, POST /p/<
     if (mine && mine.n >= 3) return json({ error: "too many bookings today" }, 429, ch);
     const start = Math.round(+b.s), booked = await bpBooked(env, handle, now);
     if (!bpSlots(cfg, m, booked, now).some(d => d.times.includes(start))) return json({ error: "taken" }, 409, ch);
-    const paid = (m.price || 0) > 0; let acct = null;
+    const price = bpPriceAt(m, start, cfg.tz), paid = price > 0; let acct = null;
     if (paid) { const pa = env.STRIPE_SECRET_KEY ? await payAcct(env, pg.sub) : null; if (!pa || !pa.ready) return json({ error: "payments not ready" }, 402, ch); acct = pa.acct; }
     const id = "bk_" + rnd(9), tok = rnd(18), end = start + m.len * 6e4;
-    const doc = { m: m.id, title: m.title, len: m.len, how, name, email, phone, answer, q: m.q, note, created: now, tok, ...(paid ? { price: m.price, currency: m.currency } : {}) };
+    const doc = { m: m.id, title: m.title, len: m.len, how, name, email, phone, answer, q: m.q, note, created: now, tok, ...(paid ? { price, currency: m.currency, ...(m.dep ? { dep: true } : {}) } : {}) };
     await env.DB.prepare("INSERT INTO bbook (id, handle, sub, s, e, box, state, tok, ip, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, handle, pg.sub, start, end, await seal(env, pg.sub, doc), paid ? "hold" : "ok", await sha256("bptok:" + tok), ip, now).run();
     const clash = (await bpBooked(env, handle, now)).filter(x => start < x.e && end > x.s).length; // two people at the same instant: the second one loses
     if (clash > 1) { const first = await env.DB.prepare("SELECT id FROM bbook WHERE handle = ? AND state = 'ok' AND s < ? AND e > ? ORDER BY created, id LIMIT 1").bind(handle, end, start).first();
       if (first && first.id !== id) { await env.DB.prepare("DELETE FROM bbook WHERE id = ?").bind(id).run(); return json({ error: "taken" }, 409, ch); } }
-    if (paid) { let url; try { url = await payCheckout(env, { handle, m, id, tok, email, acct, ownerName: cfg.profile.name }); } catch { await env.DB.prepare("DELETE FROM bbook WHERE id = ?").bind(id).run(); return json({ error: "payment page failed" }, 502, ch); }
-      return json({ ok: true, pay: url, manage: tok, s: start, e: end, title: m.title, price: m.price, currency: m.currency }, 200, ch); }
+    if (paid) { let url; try { url = await payCheckout(env, { handle, m: { ...m, price }, id, tok, email, acct, ownerName: cfg.profile.name }); } catch { await env.DB.prepare("DELETE FROM bbook WHERE id = ?").bind(id).run(); return json({ error: "payment page failed" }, 502, ch); }
+      return json({ ok: true, pay: url, manage: tok, s: start, e: end, title: m.title, price, currency: m.currency }, 200, ch); }
     const job = bpConfirmed(env, { id, handle, sub: pg.sub, s: start, e: end, doc, cfg }, ctx); if (ctx && ctx.waitUntil) ctx.waitUntil(job); else await job;
     const when = bpWhen(start, cfg.tz);
     return json({ ok: true, s: start, e: end, title: m.title, len: m.len, how, when, thanks: cfg.thanks.replace(/\{first name\}/gi, name.split(" ")[0]), link: how === "video" ? m.link : "", place: how === "person" ? m.place : "", manage: tok, mailed: !!env.RESEND_API_KEY }, 200, ch);
@@ -1220,20 +1229,24 @@ async function bpPublic(env, req, path, ch, ctx) { // GET /p/<handle>, POST /p/<
 async function bpOwner(env, req, s, path, ch, ctx) { // the owner's app: claim a link, save the page, see and cancel bookings
   await bpInit(env);
   const now = Date.now(), M = req.method, row = await env.DB.prepare("SELECT handle, box, updated FROM bpages WHERE sub = ?").bind(s.sub).first();
-  if (path === "/bpage" && M === "GET") { if (!row) return json({ on: false }, 200, ch); return json({ on: true, handle: row.handle, url: "https://hourline.io/b/" + row.handle, updated: row.updated }, 200, ch); }
+  if (path === "/bpage" && M === "GET") { if (!row) return json({ on: false, pics: true }, 200, ch); let o = null; try { o = (await open(env, s.sub, row.box)).doc; } catch { }
+    return json({ on: true, handle: row.handle, url: "https://hourline.io/b/" + row.handle, updated: row.updated, pics: true, hasPhoto: !!(o && o.profile && o.profile.photo), hasCover: !!(o && o.look && o.look.cover) }, 200, ch); }
   if (path === "/bpage/check" && M === "GET") { const h = String(new URL(req.url).searchParams.get("h") || "").toLowerCase(); if (!bpHandleOk(h)) return json({ ok: false, why: "format" }, 200, ch);
     const t = await env.DB.prepare("SELECT sub FROM bpages WHERE handle = ?").bind(h).first(); return json({ ok: !t || t.sub === s.sub }, 200, ch); }
   if (path === "/bpage" && M === "PUT") {
     if (limited(req, 30, "bpput")) return json({ error: "slow down" }, 429, ch);
-    const raw = await req.text(); if (raw.length > 200_000) return json({ error: "too big" }, 413, ch);
+    const raw = await req.text(); if (raw.length > 450_000) return json({ error: "too big" }, 413, ch);
     let b; try { b = JSON.parse(raw); } catch { return json({ error: "bad json" }, 400, ch); }
     const h = String(b && b.handle || (row && row.handle) || "").toLowerCase(); if (!bpHandleOk(h)) return json({ error: "bad link name" }, 400, ch);
     const cfg = bpClean(b, now); if (!cfg) return json({ error: "bad page" }, 400, ch);
+    // pictures live on the server only (they'd bloat the synced schedule): a save that doesn't mention a picture keeps the one already there; "" removes it
+    if (row) { let old = null; try { old = (await open(env, s.sub, row.box)).doc; } catch { }
+      if (old) { if (!(b.profile && typeof b.profile === "object" && "photo" in b.profile)) cfg.profile.photo = bpPic(old.profile && old.profile.photo, BP_PHOTO_MAX); if (!(b.look && typeof b.look === "object" && "cover" in b.look)) cfg.look.cover = bpPic(old.look && old.look.cover, BP_COVER_MAX); } }
     if (cfg.notify && bpEmailOk(s.email)) cfg.email = String(s.email).toLowerCase();
     const taken = await env.DB.prepare("SELECT sub FROM bpages WHERE handle = ?").bind(h).first(); if (taken && taken.sub !== s.sub) return json({ error: "taken" }, 409, ch);
     if (row && row.handle !== h) { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("UPDATE bbook SET handle = ? WHERE sub = ?").bind(h, s.sub).run(); }
     await env.DB.prepare("INSERT INTO bpages (handle, sub, box, updated) VALUES (?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(h, s.sub, await seal(env, s.sub, cfg), now).run();
-    return json({ ok: true, handle: h, url: "https://hourline.io/b/" + h, mail: !!env.RESEND_API_KEY }, 200, ch);
+    return json({ ok: true, handle: h, url: "https://hourline.io/b/" + h, mail: !!env.RESEND_API_KEY, pics: true }, 200, ch);
   }
   if (path === "/bpage" && M === "DELETE") { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM bbook WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
   if (path === "/bpage/bookings" && M === "GET") {
@@ -1512,6 +1525,51 @@ async function fbInit(env) { if (fbReady) return;
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, at INTEGER NOT NULL, sub TEXT NOT NULL, box TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, meta TEXT NOT NULL DEFAULT '{}')").run();
   await env.DB.prepare("CREATE INDEX IF NOT EXISTS feedback_at ON feedback (at)").run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS admins (sub TEXT PRIMARY KEY, seen INTEGER NOT NULL)").run(); fbReady = true; }
+// ---- admin: who is on Hourline ----
+// One row per account: the sign-in email (encrypted at rest), first and last time the app talked to the server, and a
+// pause switch. Nothing from anyone's schedule, prospects, goals or notes: those stay encrypted and are never read here.
+// A paused account can't sync or use team features until it's resumed; nothing is deleted, and the app keeps working
+// on the phone. Admins (ADMIN_EMAILS) can't be paused.
+let peopleReady = false; const peopleMem = new Map();
+async function peopleInit(env) { if (peopleReady) return; await env.DB.prepare("CREATE TABLE IF NOT EXISTS seen (sub TEXT PRIMARY KEY, box TEXT NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL, paused INTEGER NOT NULL DEFAULT 0)").run(); peopleReady = true; }
+async function peopleTouch(env, s) { // returns true when this account is paused
+  const now = Date.now(), c = peopleMem.get(s.sub); if (c && now - c.at < 60_000) return c.paused;
+  await peopleInit(env);
+  const row = await env.DB.prepare("SELECT last, paused FROM seen WHERE sub = ?").bind(s.sub).first();
+  if (!row) await env.DB.prepare("INSERT INTO seen (sub, box, first, last, paused) VALUES (?, ?, ?, ?, 0) ON CONFLICT(sub) DO NOTHING").bind(s.sub, await seal(env, "people", { email: String(s.email || "").toLowerCase().slice(0, 200) }), now, now).run();
+  else if (now - row.last > 3600_000) await env.DB.prepare("UPDATE seen SET last = ?, box = ? WHERE sub = ?").bind(now, await seal(env, "people", { email: String(s.email || "").toLowerCase().slice(0, 200) }), s.sub).run(); // re-sealed each time, so a rotated key keeps it readable
+  const paused = !!(row && row.paused) && !isAdmin(env, s);
+  if (peopleMem.size > 5000) peopleMem.clear(); peopleMem.set(s.sub, { at: now, paused }); return paused;
+}
+const planFor = n => n <= 3 ? { plan: "Solo", price: 29 } : n <= 9 ? { plan: "Solo", price: 29 + (n - 3) * 10 } : n <= 15 ? { plan: "Team", price: 99 } : n <= 24 ? { plan: "Team", price: 99 + (n - 15) * 10 } : n <= 40 ? { plan: "Agency", price: 199 } : n <= 60 ? { plan: "Agency", price: 199 + (n - 40) * 5 } : { plan: "Organization", price: null };
+async function peopleRoutes(env, req, s, path, ch) {
+  if (!s) return json({ error: "signed out" }, 401, ch);
+  if (!isAdmin(env, s)) return json({ error: "not allowed" }, 403, ch);
+  await peopleInit(env); const M = req.method, now = Date.now();
+  if (path === "/admin/people" && M === "GET") {
+    const rows = (await env.DB.prepare("SELECT sub, box, first, last, paused FROM seen ORDER BY last DESC LIMIT 2000").all()).results || [];
+    const mem = (await env.DB.prepare("SELECT m.sub AS sub, m.role AS role, m.team AS team, t.name AS name FROM members m JOIN teams t ON t.id = m.team").all()).results || [];
+    let pages = []; try { pages = (await env.DB.prepare("SELECT sub, handle FROM bpages").all()).results || []; } catch { }
+    const size = {}; for (const m of mem) size[m.team] = (size[m.team] || 0) + 1;
+    const bySub = {}; for (const m of mem) (bySub[m.sub] = bySub[m.sub] || []).push({ name: String(m.name || "").slice(0, 60), role: m.role, seats: size[m.team] });
+    const pg = {}; for (const p of pages) pg[p.sub] = p.handle;
+    const people = []; for (const r of rows) { let email = ""; try { email = (await open(env, "people", r.box)).doc.email || ""; } catch { }
+      people.push({ id: r.sub, email, first: r.first, last: r.last, paused: !!r.paused, teams: bySub[r.sub] || [], page: pg[r.sub] || "", admin: adminList(env).includes(email) }); }
+    const teamRows = (await env.DB.prepare("SELECT id, name, created FROM teams").all()).results || [];
+    const teams = teamRows.map(t => ({ name: String(t.name || "").slice(0, 60), seats: size[t.id] || 0, created: t.created, ...planFor(size[t.id] || 0) })).sort((a, b) => b.seats - a.seats);
+    const act = d => rows.filter(r => now - r.last < d * 864e5).length;
+    return json({ people, teams, totals: { all: rows.length, day: act(1), week: act(7), month: act(30), new7: rows.filter(r => now - r.first < 7 * 864e5).length, paused: rows.filter(r => r.paused).length, teams: teams.length,
+      mrr: teams.reduce((a, t) => a + (t.price || 0), 0) } }, 200, { ...ch, "cache-control": "no-store" });
+  }
+  const m = path.match(/^\/admin\/people\/([A-Za-z0-9_.:|@-]{1,128})$/);
+  if (m && M === "POST") { let b = {}; try { b = await req.json(); } catch { }
+    const row = await env.DB.prepare("SELECT box FROM seen WHERE sub = ?").bind(m[1]).first(); if (!row) return json({ error: "not found" }, 404, ch);
+    let email = ""; try { email = (await open(env, "people", row.box)).doc.email || ""; } catch { }
+    if (b && b.paused && adminList(env).includes(email)) return json({ error: "admins can't be paused" }, 400, ch);
+    await env.DB.prepare("UPDATE seen SET paused = ? WHERE sub = ?").bind(b && b.paused ? 1 : 0, m[1]).run(); peopleMem.delete(m[1]);
+    return json({ ok: true, paused: !!(b && b.paused) }, 200, ch); }
+  return json({ error: "not found" }, 404, ch);
+}
 const adminList = env => String(env.ADMIN_EMAILS || "solamonjoseph97@gmail.com").toLowerCase().split(",").map(x => x.trim()).filter(Boolean);
 const isAdmin = (env, s) => !!(s && s.email && adminList(env).includes(String(s.email).toLowerCase()));
 async function feedbackRoutes(env, req, s, path, ch) {
@@ -1699,6 +1757,7 @@ export default {
       }
       // Everything below needs a valid session.
       const s = await readSession(env, req);
+      if (s && await peopleTouch(env, s)) return json({ error: "paused" }, 403, ch); // an admin paused this account; nothing is deleted
       if (path === "/auth/signout-all" && req.method === "POST") {
         if (!s) return json({ error: "signed out" }, 401, ch);
         await env.DB.prepare("INSERT INTO accounts (sub, ver) VALUES (?, 1) ON CONFLICT(sub) DO UPDATE SET ver = ver + 1").bind(s.sub).run();
@@ -1764,6 +1823,7 @@ export default {
       if (path === "/ella" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await ellaRoute(env, req, s, ch); }
       if (path === "/events" && req.method === "POST") { if (!s) return json({ error: "signed out" }, 401, ch); return await eventsRoute(env, req, s, ch); }
       if (path === "/feedback" || path === "/admin/feedback" || path.startsWith("/admin/feedback/")) return await feedbackRoutes(env, req, s, path, ch);
+      if (path === "/admin/people" || path.startsWith("/admin/people/")) return await peopleRoutes(env, req, s, path, ch);
       if (path === "/push/key" && req.method === "GET") return json({ key: (await vapidKeys(env)).pub }, 200, ch);
       if (req.method === "GET" && path.startsWith("/cal/") && path.endsWith(".ics")) return await feedPublic(env, req, path.slice(5, -4));
       if (path === "/gcal/callback" && req.method === "GET") return await gcalCallback(env, req, url);

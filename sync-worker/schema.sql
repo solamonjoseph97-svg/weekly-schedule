@@ -38,3 +38,5 @@ CREATE TABLE IF NOT EXISTS admins (sub TEXT PRIMARY KEY, seen INTEGER NOT NULL);
 
 -- Weekly draw notice per team (sealed). The server also creates this itself on first use.
 CREATE TABLE IF NOT EXISTS boards (team TEXT PRIMARY KEY, doc TEXT NOT NULL, updated INTEGER NOT NULL);
+-- who is on Hourline (admin view): sign-in email sealed in box, first and last contact, pause switch. Created by the server itself.
+CREATE TABLE IF NOT EXISTS seen (sub TEXT PRIMARY KEY, box TEXT NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL, paused INTEGER NOT NULL DEFAULT 0);
