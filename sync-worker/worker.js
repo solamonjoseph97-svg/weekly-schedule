@@ -1132,7 +1132,7 @@ async function bpOwner(env, req, s, path, ch, ctx) { // the owner's app: claim a
     await env.DB.prepare("INSERT INTO bpages (handle, sub, box, updated) VALUES (?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(h, s.sub, await seal(env, s.sub, cfg), now).run();
     return json({ ok: true, handle: h, url: "https://hourline.io/b/" + h, mail: !!env.RESEND_API_KEY }, 200, ch);
   }
-  if (path === "/bpage" && M === "DELETE") { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
+  if (path === "/bpage" && M === "DELETE") { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM bbook WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
   if (path === "/bpage/bookings" && M === "GET") {
     const rows = (await env.DB.prepare("SELECT id, s, e, box, state, created FROM bbook WHERE sub = ? AND e > ? ORDER BY s LIMIT 300").bind(s.sub, now - 30 * 864e5).all()).results || [];
     const out = []; for (const r of rows) { try { const d = (await open(env, s.sub, r.box)).doc; out.push({ id: r.id, s: r.s, e: r.e, state: r.state, created: r.created, title: d.title, len: d.len, how: d.how, name: d.name, email: d.email, phone: d.phone, q: d.q, answer: d.answer, note: d.note }); } catch { } }
