@@ -1541,7 +1541,8 @@ async function peopleTouch(env, s) { // returns true when this account is paused
   const paused = !!(row && row.paused) && !isAdmin(env, s);
   if (peopleMem.size > 5000) peopleMem.clear(); peopleMem.set(s.sub, { at: now, paused }); return paused;
 }
-const planFor = n => n <= 3 ? { plan: "Solo", price: 29 } : n <= 9 ? { plan: "Solo", price: 29 + (n - 3) * 10 } : n <= 15 ? { plan: "Team", price: 99 } : n <= 24 ? { plan: "Team", price: 99 + (n - 15) * 10 } : n <= 40 ? { plan: "Agency", price: 199 } : n <= 60 ? { plan: "Agency", price: 199 + (n - 40) * 5 } : { plan: "Organization", price: null };
+// flat price per plan (no per-seat add-ons). founding = what the first 25 paying teams pay, locked for 24 months. An estimate for the admin view: billing isn't built yet.
+const planFor = n => n <= 5 ? { plan: "Solo", price: 39, founding: 29 } : n <= 15 ? { plan: "Team", price: 129, founding: 99 } : n <= 40 ? { plan: "Agency", price: 299, founding: 199 } : { plan: "Organization", price: null, founding: null };
 async function peopleRoutes(env, req, s, path, ch) {
   if (!s) return json({ error: "signed out" }, 401, ch);
   if (!isAdmin(env, s)) return json({ error: "not allowed" }, 403, ch);
@@ -1559,7 +1560,7 @@ async function peopleRoutes(env, req, s, path, ch) {
     const teams = teamRows.map(t => ({ name: String(t.name || "").slice(0, 60), seats: size[t.id] || 0, created: t.created, ...planFor(size[t.id] || 0) })).sort((a, b) => b.seats - a.seats);
     const act = d => rows.filter(r => now - r.last < d * 864e5).length;
     return json({ people, teams, totals: { all: rows.length, day: act(1), week: act(7), month: act(30), new7: rows.filter(r => now - r.first < 7 * 864e5).length, paused: rows.filter(r => r.paused).length, teams: teams.length,
-      mrr: teams.reduce((a, t) => a + (t.price || 0), 0) } }, 200, { ...ch, "cache-control": "no-store" });
+      mrr: teams.reduce((a, t) => a + (t.price || 0), 0), mrrFounding: teams.reduce((a, t) => a + (t.founding || 0), 0) } }, 200, { ...ch, "cache-control": "no-store" });
   }
   const m = path.match(/^\/admin\/people\/([A-Za-z0-9_.:|@-]{1,128})$/);
   if (m && M === "POST") { let b = {}; try { b = await req.json(); } catch { }
