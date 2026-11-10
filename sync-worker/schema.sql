@@ -40,3 +40,6 @@ CREATE TABLE IF NOT EXISTS admins (sub TEXT PRIMARY KEY, seen INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS boards (team TEXT PRIMARY KEY, doc TEXT NOT NULL, updated INTEGER NOT NULL);
 -- who is on Hourline (admin view): sign-in email sealed in box, first and last contact, pause switch. Created by the server itself.
 CREATE TABLE IF NOT EXISTS seen (sub TEXT PRIMARY KEY, box TEXT NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL, paused INTEGER NOT NULL DEFAULT 0);
+-- Hourline's own billing (one row per paying team; card details live only at Stripe). Created by the server itself.
+CREATE TABLE IF NOT EXISTS subs (team TEXT PRIMARY KEY, owner TEXT NOT NULL, cust TEXT, sid TEXT, plan TEXT, founding INTEGER NOT NULL DEFAULT 0, fsince INTEGER, status TEXT NOT NULL, ends INTEGER, updated INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS subs_sid ON subs (sid);
