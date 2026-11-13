@@ -43,3 +43,5 @@ CREATE TABLE IF NOT EXISTS seen (sub TEXT PRIMARY KEY, box TEXT NOT NULL, first 
 -- Hourline's own billing (one row per paying team; card details live only at Stripe). Created by the server itself.
 CREATE TABLE IF NOT EXISTS subs (team TEXT PRIMARY KEY, owner TEXT NOT NULL, cust TEXT, sid TEXT, plan TEXT, founding INTEGER NOT NULL DEFAULT 0, fsince INTEGER, status TEXT NOT NULL, ends INTEGER, updated INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS subs_sid ON subs (sid);
+CREATE TABLE IF NOT EXISTS boostpay (sub TEXT NOT NULL, id TEXT NOT NULL, sess TEXT, amount INTEGER NOT NULL, state TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (sub, id));
+CREATE INDEX IF NOT EXISTS boostpay_sess ON boostpay (sess);

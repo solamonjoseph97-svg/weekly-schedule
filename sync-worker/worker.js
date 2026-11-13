@@ -1000,7 +1000,7 @@ async function bpInit(env) { if (bpReady) return;
   bpReady = true; }
 const BP_RESERVED = new Set(["app", "api", "admin", "privacy", "terms", "book", "booking", "b", "p", "login", "signin", "signup", "settings", "help", "support", "about", "pricing", "blog", "team", "teams", "hourline", "www", "mail", "static", "assets", "fonts", "marketing", "index", "cal", "feed", "join", "invite", "home", "security", "status", "legal", "contact"]);
 const bpHandleOk = h => typeof h === "string" && /^[a-z0-9](?:[a-z0-9-]{1,28})[a-z0-9]$/.test(h) && !h.includes("--") && !BP_RESERVED.has(h);
-const BP_LOOKS = ["night", "grid", "split", "clean"], BP_HOW = ["video", "phone", "person"], BP_THEMES = ["classic", "floral", "forest"], BP_PAYWHEN = ["all", "eve", "wkd"];
+const BP_LOOKS = ["night", "grid", "split", "clean"], BP_HOW = ["video", "phone", "person"], BP_THEMES = ["classic", "floral", "forest"], BP_PAYWHEN = ["all", "eve", "wkd"], BP_WANT = ["family", "retire", "career", "unsure"];
 // the owner's own pictures: a small face photo and a wider cover, shrunk on their phone before upload; JPEG or WebP only
 const bpPic = (v, max) => typeof v === "string" && v.length <= max && /^data:image\/(jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v) ? v : "";
 const BP_PHOTO_MAX = 60_000, BP_COVER_MAX = 160_000;
@@ -1032,7 +1032,7 @@ function bpClean(b, now) {
       theme: BP_THEMES.includes(look.theme) ? look.theme : "classic", cover: bpPic(look.cover, BP_COVER_MAX) },
     profile: { name: bpStr(pr.name, 60) || "Hourline user", intro: bpStr(pr.intro, 240), cred: bpStr(pr.cred, 120), photo: bpPic(pr.photo, BP_PHOTO_MAX),
       links: (Array.isArray(pr.links) ? pr.links : []).slice(0, 3).map(l => ({ k: bpStr(l && l.k, 20), url: bpUrl(l && l.url) })).filter(l => l.k && l.url) },
-    tz: bpTz(b.tz), hours, meetings, busy, buffer: [0, 5, 10, 15, 30].includes(+b.buffer) ? +b.buffer : 15, thanks: bpStr(b.thanks, 300), notify: b.notify !== false };
+    tz: bpTz(b.tz), hours, meetings, busy, buffer: [0, 5, 10, 15, 30].includes(+b.buffer) ? +b.buffer : 15, thanks: bpStr(b.thanks, 300), notify: b.notify !== false, learn: b.learn === "life" ? "life" : "" };
 }
 const bpDtf = {};
 function bpOff(ms, z) { const f = bpDtf[z] || (bpDtf[z] = new Intl.DateTimeFormat("en-US", { timeZone: z, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }));
@@ -1124,6 +1124,37 @@ async function payRefund(env, bookingId) { // best effort; full refund including
   try { await stripe(env, "POST", "/v1/refunds", { payment_intent: p.pi, reverse_transfer: true, refund_application_fee: true }, "rf-" + bookingId);
     await env.DB.prepare("UPDATE bpaid SET state = 'refunded', updated = ? WHERE booking = ?").bind(Date.now(), bookingId).run(); return true; } catch { return false; } }
 // ---- Hourline's own billing: one flat monthly price per team, paid by the lead ----
+// ---- Boost: a one-time payment per boost. Off unless STRIPE_SECRET_KEY is set AND BOOST_BILLING is "1" AND BOOST_PRICE_CENTS is a
+// real price ($1 to $1,000). While it's off, Boost is free and these routes say so. Hourline never touches ad money: each agent
+// runs the ad from their own ad account. Card details only ever go to Stripe; a boost counts as paid only when Stripe's signed webhook says so.
+const boostPrice = env => { const p = Math.round(+env.BOOST_PRICE_CENTS); return p >= 100 && p <= 100000 ? p : 0; };
+const boostBillingOn = env => !!env.STRIPE_SECRET_KEY && env.BOOST_BILLING === "1" && boostPrice(env) > 0;
+const boostIdOk = v => typeof v === "string" && /^bo[a-z0-9]{6,16}$/.test(v);
+let boostReady = false;
+async function boostInit(env) { if (boostReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS boostpay (sub TEXT NOT NULL, id TEXT NOT NULL, sess TEXT, amount INTEGER NOT NULL, state TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (sub, id))").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS boostpay_sess ON boostpay (sess)").run(); boostReady = true; }
+async function boostRoutes(env, req, s, path, ch) { // GET /boost/billing, POST /boost/checkout
+  const on = boostBillingOn(env), price = boostPrice(env);
+  if (path === "/boost/billing" && req.method === "GET") {
+    if (!on) return json({ on: false, price: 0, paid: [] }, 200, ch);
+    await boostInit(env); const rows = (await env.DB.prepare("SELECT id FROM boostpay WHERE sub = ? AND state = 'paid' ORDER BY updated DESC LIMIT 200").bind(s.sub).all()).results || [];
+    return json({ on: true, price, paid: rows.map(r => r.id) }, 200, ch); }
+  if (path === "/boost/checkout" && req.method === "POST") {
+    if (!on) return json({ on: false }, 200, ch); // free while billing is off: nothing to pay
+    if (limited(req, 10, "boostpay")) return json({ error: "slow down" }, 429, ch);
+    let b; try { const raw = await req.text(); if (raw.length > 500) return json({ error: "too big" }, 413, ch); b = JSON.parse(raw); } catch { return json({ error: "bad json" }, 400, ch); }
+    const id = b && b.id; if (!boostIdOk(id)) return json({ error: "bad boost" }, 400, ch);
+    await boostInit(env); const row = await env.DB.prepare("SELECT state FROM boostpay WHERE sub = ? AND id = ?").bind(s.sub, id).first();
+    if (row && row.state === "paid") return json({ on: true, paid: true }, 200, ch);
+    const site = env.APP_ORIGIN ? String(env.APP_ORIGIN).split(",")[0] : "https://hourline.io"; let sess;
+    try { sess = await stripe(env, "POST", "/v1/checkout/sessions", { mode: "payment", ...(bpEmailOk(s.email) ? { customer_email: s.email } : {}),
+      line_items: { 0: { quantity: 1, price_data: { currency: "usd", unit_amount: price, product_data: { name: "Hourline Boost" } } } },
+      metadata: { kind: "boost", boost: id }, success_url: `${site}/app/?boost=paid`, cancel_url: `${site}/app/?boost=unpaid` }); } catch { return json({ error: "payment page failed" }, 502, ch); }
+    await env.DB.prepare("INSERT INTO boostpay (sub, id, sess, amount, state, updated) VALUES (?, ?, ?, ?, 'open', ?) ON CONFLICT(sub, id) DO UPDATE SET sess = excluded.sess, amount = excluded.amount, updated = excluded.updated WHERE boostpay.state != 'paid'").bind(s.sub, id, String(sess.id), price, Date.now()).run();
+    return json({ on: true, url: sess.url }, 200, ch); }
+  return json({ error: "not found" }, 404, ch);
+}
 // Off unless STRIPE_SECRET_KEY is set AND BILLING is "1" (so turning on paid bookings never starts charging teams).
 // Plans by people on the team: Solo 1-5 $39, Team 6-15 $129, Agency 16-40 $299, 41+ by conversation. The first 25 paying
 // teams get the founding price ($29 / $99 / $199) for 24 months. Grace: up to 2 people over a plan's limit stay on it.
@@ -1221,6 +1252,7 @@ async function stripeWebhook(env, req, ctx) {
   await payInit(env); await bpInit(env); const o = ev.data && ev.data.object || {}, now = Date.now();
   if (ev.type === "account.updated" && o.id) { await env.DB.prepare("UPDATE bpay SET ready = ?, updated = ? WHERE acct = ?").bind(o.charges_enabled ? 1 : 0, now, o.id).run(); }
   if ((ev.type === "checkout.session.completed" || ev.type === "checkout.session.async_payment_succeeded") && o.payment_status === "paid") {
+    if (o.metadata && o.metadata.kind === "boost") { await boostInit(env); await env.DB.prepare("UPDATE boostpay SET state = 'paid', updated = ? WHERE sess = ? AND amount = ?").bind(now, String(o.id), Math.round(+o.amount_total || 0)).run(); }
     const p = await env.DB.prepare("SELECT booking, state FROM bpaid WHERE sess = ?").bind(String(o.id)).first();
     if (p && p.state !== "paid") {
       await env.DB.prepare("UPDATE bpaid SET state = 'paid', pi = ?, updated = ? WHERE booking = ?").bind(String(o.payment_intent || ""), now, p.booking).run();
@@ -1263,7 +1295,7 @@ async function bpPublic(env, req, path, ch, ctx) { // GET /p/<handle>, POST /p/<
   const cfg = pg.cfg;
   if (parts.length === 2 && req.method === "GET") {
     const booked = await bpBooked(env, handle, now), pa = env.STRIPE_SECRET_KEY ? await payAcct(env, pg.sub) : null;
-    return json({ handle, look: cfg.look, profile: cfg.profile, tz: cfg.tz, thanks: "", made: true,
+    return json({ handle, look: cfg.look, profile: cfg.profile, tz: cfg.tz, thanks: "", made: true, learn: cfg.learn || "",
       pay: !!(pa && pa.ready), meetings: cfg.meetings.filter(m => m.on).map(m => ({ id: m.id, title: m.title, len: m.len, sub: m.sub, how: m.how, before: m.before, q: m.q, qreq: m.qreq, price: m.price || 0, currency: m.currency || "usd", payWhen: m.payWhen || "all", dep: !!m.dep, days: bpSlots(cfg, m, booked, now) })) }, 200, { ...ch, "cache-control": "no-store" });
   }
   if (parts.length === 3 && parts[2] === "book" && req.method === "POST") {
@@ -1275,6 +1307,9 @@ async function bpPublic(env, req, path, ch, ctx) { // GET /p/<handle>, POST /p/<
     const how = BP_HOW.includes(b.how) && m.how.includes(b.how) ? b.how : m.how[0] || "video";
     if (!name || !bpEmailOk(email)) return json({ error: "name and email needed" }, 400, ch);
     if (m.qreq && m.q && !answer) return json({ error: "answer needed" }, 400, ch);
+    // lead details (only kept when the page shows the short videos): what they want to talk about, where they came from, and a record of the OK-to-contact box they ticked
+    const want = cfg.learn && BP_WANT.includes(b.want) ? b.want : "", src = bpStr(b.src, 40).replace(/[^A-Za-z0-9_.-]/g, "");
+    const okc = cfg.learn && b.ok === true && phone ? { at: now, v: /^c[0-9]{1,3}$/.test(String(b.okv)) ? String(b.okv) : "c1" } : null;
     const ip = await sha256("bpip:" + (req.headers.get("cf-connecting-ip") || "local") + ":" + handle);
     const mine = await env.DB.prepare("SELECT COUNT(*) AS n FROM bbook WHERE handle = ? AND ip = ? AND created > ?").bind(handle, ip, now - 864e5).first();
     if (mine && mine.n >= 3) return json({ error: "too many bookings today" }, 429, ch);
@@ -1283,7 +1318,7 @@ async function bpPublic(env, req, path, ch, ctx) { // GET /p/<handle>, POST /p/<
     const price = bpPriceAt(m, start, cfg.tz), paid = price > 0; let acct = null;
     if (paid) { const pa = env.STRIPE_SECRET_KEY ? await payAcct(env, pg.sub) : null; if (!pa || !pa.ready) return json({ error: "payments not ready" }, 402, ch); acct = pa.acct; }
     const id = "bk_" + rnd(9), tok = rnd(18), end = start + m.len * 6e4;
-    const doc = { m: m.id, title: m.title, len: m.len, how, name, email, phone, answer, q: m.q, note, created: now, tok, ...(paid ? { price, currency: m.currency, ...(m.dep ? { dep: true } : {}) } : {}) };
+    const doc = { m: m.id, title: m.title, len: m.len, how, name, email, phone, answer, q: m.q, note, created: now, tok, ...(want ? { want } : {}), ...(src ? { src } : {}), ...(okc ? { okc } : {}), ...(paid ? { price, currency: m.currency, ...(m.dep ? { dep: true } : {}) } : {}) };
     await env.DB.prepare("INSERT INTO bbook (id, handle, sub, s, e, box, state, tok, ip, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, handle, pg.sub, start, end, await seal(env, pg.sub, doc), paid ? "hold" : "ok", await sha256("bptok:" + tok), ip, now).run();
     const clash = (await bpBooked(env, handle, now)).filter(x => start < x.e && end > x.s).length; // two people at the same instant: the second one loses
     if (clash > 1) { const first = await env.DB.prepare("SELECT id FROM bbook WHERE handle = ? AND state = 'ok' AND s < ? AND e > ? ORDER BY created, id LIMIT 1").bind(handle, end, start).first();
@@ -1333,12 +1368,12 @@ async function bpOwner(env, req, s, path, ch, ctx) { // the owner's app: claim a
     const taken = await env.DB.prepare("SELECT sub FROM bpages WHERE handle = ?").bind(h).first(); if (taken && taken.sub !== s.sub) return json({ error: "taken" }, 409, ch);
     if (row && row.handle !== h) { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("UPDATE bbook SET handle = ? WHERE sub = ?").bind(h, s.sub).run(); }
     await env.DB.prepare("INSERT INTO bpages (handle, sub, box, updated) VALUES (?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET box = excluded.box, updated = excluded.updated").bind(h, s.sub, await seal(env, s.sub, cfg), now).run();
-    return json({ ok: true, handle: h, url: "https://hourline.io/b/" + h, mail: !!env.RESEND_API_KEY, pics: true }, 200, ch);
+    return json({ ok: true, handle: h, url: "https://hourline.io/b/" + h, mail: !!env.RESEND_API_KEY, pics: true, learn: true }, 200, ch);
   }
   if (path === "/bpage" && M === "DELETE") { await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM bbook WHERE sub = ?").bind(s.sub).run(); return json({ ok: true }, 200, ch); }
   if (path === "/bpage/bookings" && M === "GET") {
     const rows = (await env.DB.prepare("SELECT id, s, e, box, state, created FROM bbook WHERE sub = ? AND e > ? ORDER BY s LIMIT 300").bind(s.sub, now - 30 * 864e5).all()).results || [];
-    const out = []; for (const r of rows) { try { const d = (await open(env, s.sub, r.box)).doc; if (r.state === "hold" && now - r.created > HOLD_MS) continue; out.push({ id: r.id, s: r.s, e: r.e, state: r.state, created: r.created, title: d.title, len: d.len, how: d.how, name: d.name, email: d.email, phone: d.phone, q: d.q, answer: d.answer, note: d.note, ...(d.price ? { price: d.price, currency: d.currency } : {}) }); } catch { } }
+    const out = []; for (const r of rows) { try { const d = (await open(env, s.sub, r.box)).doc; if (r.state === "hold" && now - r.created > HOLD_MS) continue; out.push({ id: r.id, s: r.s, e: r.e, state: r.state, created: r.created, title: d.title, len: d.len, how: d.how, name: d.name, email: d.email, phone: d.phone, q: d.q, answer: d.answer, note: d.note, ...(d.want ? { want: d.want } : {}), ...(d.src ? { src: d.src } : {}), ...(d.okc ? { okc: d.okc } : {}), ...(d.price ? { price: d.price, currency: d.currency } : {}) }); } catch { } }
     return json({ bookings: out }, 200, ch);
   }
   const mc = path.match(/^\/bpage\/bookings\/(bk_[A-Za-z0-9_-]{8,20})\/cancel$/);
@@ -1889,7 +1924,7 @@ export default {
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await feedInit(env); await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run();
-          await bpInit(env); await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM bbook WHERE sub = ?").bind(s.sub).run(); await payInit(env); await env.DB.prepare("DELETE FROM bpay WHERE sub = ?").bind(s.sub).run();
+          await bpInit(env); await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM bbook WHERE sub = ?").bind(s.sub).run(); await payInit(env); await env.DB.prepare("DELETE FROM bpay WHERE sub = ?").bind(s.sub).run(); await boostInit(env); await env.DB.prepare("DELETE FROM boostpay WHERE sub = ?").bind(s.sub).run();
           await gcalInit(env); { const g = await env.DB.prepare("SELECT box FROM gcal WHERE sub = ?").bind(s.sub).first(); if (g) { try { const d = (await open(env, s.sub, g.box)).doc; await fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(d.rt), { method: "POST" }); } catch (e) { } } }
           await env.DB.prepare("DELETE FROM gcal WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM gcal_state WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
@@ -1920,6 +1955,7 @@ export default {
       if (path === "/gcal/callback" && req.method === "GET") return await gcalCallback(env, req, url);
       if (path.startsWith("/p/")) return await bpPublic(env, req, path, ch, ctx);
       if (path === "/stripe/webhook" && req.method === "POST") return await stripeWebhook(env, req, ctx);
+      if (path === "/boost/billing" || path === "/boost/checkout") { if (!s) return json({ error: "signed out" }, 401, ch); return await boostRoutes(env, req, s, path, ch); }
       if (path === "/bpage/pay" || path.startsWith("/bpage/pay/")) { if (!s) return json({ error: "signed out" }, 401, ch); return await payRoutes(env, req, s, path, ch); }
       if (path === "/bpage" || path.startsWith("/bpage/")) { if (!s) return json({ error: "signed out" }, 401, ch); return await bpOwner(env, req, s, path, ch, ctx); }
       if (path === "/gcal" || path.startsWith("/gcal/")) { if (!s) return json({ error: "signed out" }, 401, ch); return await gcalRoutes(env, req, s, path, ch); }
