@@ -1124,6 +1124,37 @@ async function payRefund(env, bookingId) { // best effort; full refund including
   try { await stripe(env, "POST", "/v1/refunds", { payment_intent: p.pi, reverse_transfer: true, refund_application_fee: true }, "rf-" + bookingId);
     await env.DB.prepare("UPDATE bpaid SET state = 'refunded', updated = ? WHERE booking = ?").bind(Date.now(), bookingId).run(); return true; } catch { return false; } }
 // ---- Hourline's own billing: one flat monthly price per team, paid by the lead ----
+// ---- Boost: a one-time payment per boost. Off unless STRIPE_SECRET_KEY is set AND BOOST_BILLING is "1" AND BOOST_PRICE_CENTS is a
+// real price ($1 to $1,000). While it's off, Boost is free and these routes say so. Hourline never touches ad money: each agent
+// runs the ad from their own ad account. Card details only ever go to Stripe; a boost counts as paid only when Stripe's signed webhook says so.
+const boostPrice = env => { const p = Math.round(+env.BOOST_PRICE_CENTS); return p >= 100 && p <= 100000 ? p : 0; };
+const boostBillingOn = env => !!env.STRIPE_SECRET_KEY && env.BOOST_BILLING === "1" && boostPrice(env) > 0;
+const boostIdOk = v => typeof v === "string" && /^bo[a-z0-9]{6,16}$/.test(v);
+let boostReady = false;
+async function boostInit(env) { if (boostReady) return;
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS boostpay (sub TEXT NOT NULL, id TEXT NOT NULL, sess TEXT, amount INTEGER NOT NULL, state TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (sub, id))").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS boostpay_sess ON boostpay (sess)").run(); boostReady = true; }
+async function boostRoutes(env, req, s, path, ch) { // GET /boost/billing, POST /boost/checkout
+  const on = boostBillingOn(env), price = boostPrice(env);
+  if (path === "/boost/billing" && req.method === "GET") {
+    if (!on) return json({ on: false, price: 0, paid: [] }, 200, ch);
+    await boostInit(env); const rows = (await env.DB.prepare("SELECT id FROM boostpay WHERE sub = ? AND state = 'paid' ORDER BY updated DESC LIMIT 200").bind(s.sub).all()).results || [];
+    return json({ on: true, price, paid: rows.map(r => r.id) }, 200, ch); }
+  if (path === "/boost/checkout" && req.method === "POST") {
+    if (!on) return json({ on: false }, 200, ch); // free while billing is off: nothing to pay
+    if (limited(req, 10, "boostpay")) return json({ error: "slow down" }, 429, ch);
+    let b; try { const raw = await req.text(); if (raw.length > 500) return json({ error: "too big" }, 413, ch); b = JSON.parse(raw); } catch { return json({ error: "bad json" }, 400, ch); }
+    const id = b && b.id; if (!boostIdOk(id)) return json({ error: "bad boost" }, 400, ch);
+    await boostInit(env); const row = await env.DB.prepare("SELECT state FROM boostpay WHERE sub = ? AND id = ?").bind(s.sub, id).first();
+    if (row && row.state === "paid") return json({ on: true, paid: true }, 200, ch);
+    const site = env.APP_ORIGIN ? String(env.APP_ORIGIN).split(",")[0] : "https://hourline.io"; let sess;
+    try { sess = await stripe(env, "POST", "/v1/checkout/sessions", { mode: "payment", ...(bpEmailOk(s.email) ? { customer_email: s.email } : {}),
+      line_items: { 0: { quantity: 1, price_data: { currency: "usd", unit_amount: price, product_data: { name: "Hourline Boost" } } } },
+      metadata: { kind: "boost", boost: id }, success_url: `${site}/app/?boost=paid`, cancel_url: `${site}/app/?boost=unpaid` }); } catch { return json({ error: "payment page failed" }, 502, ch); }
+    await env.DB.prepare("INSERT INTO boostpay (sub, id, sess, amount, state, updated) VALUES (?, ?, ?, ?, 'open', ?) ON CONFLICT(sub, id) DO UPDATE SET sess = excluded.sess, amount = excluded.amount, updated = excluded.updated WHERE boostpay.state != 'paid'").bind(s.sub, id, String(sess.id), price, Date.now()).run();
+    return json({ on: true, url: sess.url }, 200, ch); }
+  return json({ error: "not found" }, 404, ch);
+}
 // Off unless STRIPE_SECRET_KEY is set AND BILLING is "1" (so turning on paid bookings never starts charging teams).
 // Plans by people on the team: Solo 1-5 $39, Team 6-15 $129, Agency 16-40 $299, 41+ by conversation. The first 25 paying
 // teams get the founding price ($29 / $99 / $199) for 24 months. Grace: up to 2 people over a plan's limit stay on it.
@@ -1221,6 +1252,7 @@ async function stripeWebhook(env, req, ctx) {
   await payInit(env); await bpInit(env); const o = ev.data && ev.data.object || {}, now = Date.now();
   if (ev.type === "account.updated" && o.id) { await env.DB.prepare("UPDATE bpay SET ready = ?, updated = ? WHERE acct = ?").bind(o.charges_enabled ? 1 : 0, now, o.id).run(); }
   if ((ev.type === "checkout.session.completed" || ev.type === "checkout.session.async_payment_succeeded") && o.payment_status === "paid") {
+    if (o.metadata && o.metadata.kind === "boost") { await boostInit(env); await env.DB.prepare("UPDATE boostpay SET state = 'paid', updated = ? WHERE sess = ? AND amount = ?").bind(now, String(o.id), Math.round(+o.amount_total || 0)).run(); }
     const p = await env.DB.prepare("SELECT booking, state FROM bpaid WHERE sess = ?").bind(String(o.id)).first();
     if (p && p.state !== "paid") {
       await env.DB.prepare("UPDATE bpaid SET state = 'paid', pi = ?, updated = ? WHERE booking = ?").bind(String(o.payment_intent || ""), now, p.booking).run();
@@ -1892,7 +1924,7 @@ export default {
           await env.DB.prepare("DELETE FROM members WHERE sub = ?").bind(s.sub).run();
           await pushInit(env); await env.DB.prepare("DELETE FROM push WHERE sub = ?").bind(s.sub).run();
           await feedInit(env); await env.DB.prepare("DELETE FROM feeds WHERE sub = ?").bind(s.sub).run();
-          await bpInit(env); await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM bbook WHERE sub = ?").bind(s.sub).run(); await payInit(env); await env.DB.prepare("DELETE FROM bpay WHERE sub = ?").bind(s.sub).run();
+          await bpInit(env); await env.DB.prepare("DELETE FROM bpages WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM bbook WHERE sub = ?").bind(s.sub).run(); await payInit(env); await env.DB.prepare("DELETE FROM bpay WHERE sub = ?").bind(s.sub).run(); await boostInit(env); await env.DB.prepare("DELETE FROM boostpay WHERE sub = ?").bind(s.sub).run();
           await gcalInit(env); { const g = await env.DB.prepare("SELECT box FROM gcal WHERE sub = ?").bind(s.sub).first(); if (g) { try { const d = (await open(env, s.sub, g.box)).doc; await fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(d.rt), { method: "POST" }); } catch (e) { } } }
           await env.DB.prepare("DELETE FROM gcal WHERE sub = ?").bind(s.sub).run(); await env.DB.prepare("DELETE FROM gcal_state WHERE sub = ?").bind(s.sub).run();
           await ellaInit(env); await env.DB.prepare("DELETE FROM ella_use WHERE sub = ?").bind(s.sub).run();
@@ -1923,6 +1955,7 @@ export default {
       if (path === "/gcal/callback" && req.method === "GET") return await gcalCallback(env, req, url);
       if (path.startsWith("/p/")) return await bpPublic(env, req, path, ch, ctx);
       if (path === "/stripe/webhook" && req.method === "POST") return await stripeWebhook(env, req, ctx);
+      if (path === "/boost/billing" || path === "/boost/checkout") { if (!s) return json({ error: "signed out" }, 401, ch); return await boostRoutes(env, req, s, path, ch); }
       if (path === "/bpage/pay" || path.startsWith("/bpage/pay/")) { if (!s) return json({ error: "signed out" }, 401, ch); return await payRoutes(env, req, s, path, ch); }
       if (path === "/bpage" || path.startsWith("/bpage/")) { if (!s) return json({ error: "signed out" }, 401, ch); return await bpOwner(env, req, s, path, ch, ctx); }
       if (path === "/gcal" || path.startsWith("/gcal/")) { if (!s) return json({ error: "signed out" }, 401, ch); return await gcalRoutes(env, req, s, path, ch); }
